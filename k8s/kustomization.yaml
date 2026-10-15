@@ -1,0 +1,42 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: power-poc
+
+resources:
+  - 00-namespace.yaml
+  - 10-secrets.yaml
+  - 20-mysql.yaml
+  - 25-redis.yaml
+  - 30-app-config.yaml
+  - 40-phr-api.yaml
+  - 41-phr-api-migrate.yaml
+  - 50-phr-web.yaml
+  - 51-phr-web-migrate.yaml
+  - 52-phr-worker.yaml
+  - 60-loadgen.yaml
+
+# Single source of truth for the registry. scripts/deploy.sh rewrites newName
+# from $ACR_NAME, or edit these two lines by hand.
+images:
+  - name: phr-api
+    newName: REPLACE_WITH_ACR.azurecr.io/phr-api
+    newTag: v1
+  - name: phr-web
+    newName: REPLACE_WITH_ACR.azurecr.io/phr-web
+    newTag: v1
+
+# Shell scripts and config files live as real files on disk so they can be
+# linted and edited normally, and become ConfigMaps at apply time.
+configMapGenerator:
+  - name: phr-mysql-init
+    files:
+      - mysql-init/01-init-schemas.sh
+  - name: phr-loadgen-script
+    files:
+      - loadgen/traffic.sh
+
+generatorOptions:
+  # Stable names: a hash suffix would restart the MySQL StatefulSet every time
+  # the init script changed, which is never what you want here.
+  disableNameSuffixHash: true

@@ -1,0 +1,41 @@
+<% content_for :title, "Projects" %>
+<h1>Projects</h1>
+<p class="sub"><%= number_with_delimiter @total %> total &middot; page <%= @page %></p>
+
+<div class="toolbar">
+  <%= form_with url: projects_path, method: :get, local: true do %>
+    <%= select_tag :status,
+          options_for_select([["All statuses", ""]] + @statuses.map { |s| [s.tr("_", " "), s] }, params[:status]),
+          onchange: "this.form.requestSubmit()" %>
+  <% end %>
+</div>
+
+<div class="panel">
+  <table>
+    <thead>
+      <tr><th>Project</th><th>Customer</th><th>Product</th><th>Branch</th><th>Status</th><th>Start</th><th class="num">Amount</th></tr>
+    </thead>
+    <tbody>
+      <% if @projects.empty? %>
+        <tr><td colspan="7" class="empty">No projects found.</td></tr>
+      <% end %>
+      <% @projects.each do |project| %>
+        <tr>
+          <td><%= link_to project.name, project_path(project) %></td>
+          <td><%= link_to project.customer.full_name, customer_path(project.customer) %></td>
+          <td><%= project.product.name %></td>
+          <td><%= project.branch %></td>
+          <td><%= status_badge project.status %></td>
+          <td><%= project.start_date&.to_s || "—" %></td>
+          <td class="num"><%= money project.contract_amount %></td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+</div>
+
+<div class="pager">
+  <% if @page > 1 %><%= link_to "‹ Previous", projects_path(page: @page - 1, status: params[:status]), class: "btn ghost" %><% end %>
+  <% if @page * @per_page < @total %><%= link_to "Next ›", projects_path(page: @page + 1, status: params[:status]), class: "btn ghost" %><% end %>
+  <span>showing <%= @projects.size %> of <%= number_with_delimiter @total %></span>
+</div>

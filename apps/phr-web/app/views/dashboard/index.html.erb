@@ -1,0 +1,96 @@
+<% content_for :title, "Operations Dashboard" %>
+<h1>Operations Dashboard</h1>
+<p class="sub">
+  Local schema <code><%= ActiveRecord::Base.connection.current_database %></code>
+  &middot; leads service <code><%= Rails.configuration.x.api_base_url %></code>
+</p>
+
+<div class="cards">
+  <div class="card"><div class="label">Customers</div><div class="value"><%= number_with_delimiter @customer_count %></div></div>
+  <div class="card"><div class="label">Projects</div><div class="value"><%= number_with_delimiter @project_count %></div></div>
+  <div class="card"><div class="label">Active projects</div><div class="value"><%= number_with_delimiter @active_projects %></div></div>
+  <div class="card"><div class="label">Active contract value</div><div class="value"><%= money @contract_value %></div></div>
+</div>
+
+<h2>Projects by status</h2>
+<div class="panel">
+  <table>
+    <thead><tr><th>Status</th><th class="num">Projects</th></tr></thead>
+    <tbody>
+      <% if @projects_by_status.empty? %>
+        <tr><td colspan="2" class="empty">No projects yet — run the seed job.</td></tr>
+      <% end %>
+      <% @projects_by_status.sort_by { |_, count| -count }.each do |status, count| %>
+        <tr>
+          <td><%= status_badge status %></td>
+          <td class="num"><%= number_with_delimiter count %></td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+</div>
+
+<h2>Top branches by active contract value</h2>
+<div class="panel">
+  <table>
+    <thead><tr><th>Branch</th><th class="num">Contract value</th></tr></thead>
+    <tbody>
+      <% if @top_branches.empty? %>
+        <tr><td colspan="2" class="empty">No data.</td></tr>
+      <% end %>
+      <% @top_branches.each do |branch, value| %>
+        <tr><td><%= branch %></td><td class="num"><%= money value %></td></tr>
+      <% end %>
+    </tbody>
+  </table>
+</div>
+
+<h2>Leads pipeline <span style="font-weight:400;color:#6b7280;font-size:13px;">(from phr-api)</span></h2>
+<% if @api_stats.nil? %>
+  <div class="panel"><div class="empty">phr-api did not respond. The rest of this page still works.</div></div>
+<% else %>
+  <div class="cards" style="margin-bottom:14px;">
+    <div class="card"><div class="label">Total leads</div><div class="value"><%= number_with_delimiter @api_stats["total_leads"] %></div></div>
+    <div class="card"><div class="label">Total appointments</div><div class="value"><%= number_with_delimiter @api_stats["total_appointments"] %></div></div>
+  </div>
+  <div class="panel">
+    <table>
+      <thead>
+        <tr><th>Product</th><th class="num">Leads</th><th class="num">Avg score</th><th class="num">Pipeline value</th></tr>
+      </thead>
+      <tbody>
+        <% Array(@api_stats["pipeline_by_product"]).each do |row| %>
+          <tr>
+            <td><%= humanize_key row["product_interest"] %></td>
+            <td class="num"><%= number_with_delimiter row["lead_count"] %></td>
+            <td class="num"><%= row["avg_score"] %></td>
+            <td class="num"><%= money row["pipeline_value"] %></td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  </div>
+<% end %>
+
+<h2>Recent projects</h2>
+<div class="panel">
+  <table>
+    <thead>
+      <tr><th>Project</th><th>Customer</th><th>Product</th><th>Status</th><th class="num">Amount</th></tr>
+    </thead>
+    <tbody>
+      <% if @recent_projects.empty? %>
+        <tr><td colspan="5" class="empty">No projects yet.</td></tr>
+      <% end %>
+      <% @recent_projects.each do |project| %>
+        <tr>
+          <td><%= link_to project.name, project_path(project) %></td>
+          <td><%= link_to project.customer.full_name, customer_path(project.customer) %></td>
+          <td><%= humanize_key project.product.category %></td>
+          <td><%= status_badge project.status %></td>
+          <td class="num"><%= money project.contract_amount %></td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+</div>

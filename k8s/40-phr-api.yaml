@@ -1,0 +1,107 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: phr-api
+  namespace: power-poc
+  labels:
+    app: phr-api
+    app.kubernetes.io/name: phr-api
+    app.kubernetes.io/part-of: power-poc
+spec:
+  type: ClusterIP
+  selector:
+    app: phr-api
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: phr-api
+  namespace: power-poc
+  labels:
+    app: phr-api
+    app.kubernetes.io/name: phr-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: power-poc
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: phr-api
+  template:
+    metadata:
+      labels:
+        app: phr-api
+        app.kubernetes.io/name: phr-api
+        app.kubernetes.io/component: api
+        app.kubernetes.io/part-of: power-poc
+    spec:
+      imagePullSecrets:
+         - name: acr-pull
+      containers:
+        - name: phr-api
+          # Rewritten by the images: block in kustomization.yaml.
+          image: phr-api
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: phr-app-config
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: "phr-api"
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: phr-mysql-secrets
+                  key: API_DB_NAME
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: phr-mysql-secrets
+                  key: MYSQL_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: phr-mysql-secrets
+                  key: MYSQL_PASSWORD
+            - name: SECRET_KEY_BASE
+              valueFrom:
+                secretKeyRef:
+                  name: phr-app-secrets
+                  key: SECRET_KEY_BASE
+          # /health does not touch MySQL, /ready does. A database blip should
+          # take pods out of the Service, not restart them.
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /ready, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 384Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop: ["ALL"]

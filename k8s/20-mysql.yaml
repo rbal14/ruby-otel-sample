@@ -1,0 +1,141 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  namespace: power-poc
+  labels:
+    app: mysql
+    app.kubernetes.io/name: mysql
+    app.kubernetes.io/part-of: power-poc
+spec:
+  # Headless: the StatefulSet gets a stable DNS name (mysql-0.mysql), and the
+  # Service name "mysql" is what both Rails apps connect to.
+  clusterIP: None
+  selector:
+    app: mysql
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: 3306
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql
+  namespace: power-poc
+  labels:
+    app: mysql
+    app.kubernetes.io/name: mysql
+    app.kubernetes.io/part-of: power-poc
+spec:
+  serviceName: mysql
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+        app.kubernetes.io/name: mysql
+        app.kubernetes.io/part-of: power-poc
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: mysql
+              containerPort: 3306
+          envFrom:
+            - secretRef:
+                name: phr-mysql-secrets
+          # Server settings are passed as flags rather than mounted into a
+          # conf.d directory: /docker-entrypoint-initdb.d is a stable,
+          # documented interface on this image, but the config include path has
+          # moved between the Debian and Oracle Linux bases. Flags always work.
+          args:
+            - --character-set-server=utf8mb4
+            - --collation-server=utf8mb4_unicode_ci
+            # The mysql2 gem links against libmariadb. MySQL 8's default
+            # caching_sha2_password handshake is the most common cause of
+            # "authentication plugin cannot be loaded" with that client.
+            # (Deprecated in 8.0.34+, removed in 8.4 -- revisit on an upgrade.)
+            - --default-authentication-plugin=mysql_native_password
+            # Statement-level monitoring reads from performance_schema.
+            - --performance-schema=ON
+            - --performance-schema-consumer-events-statements-current=ON
+            - --performance-schema-consumer-events-statements-history=ON
+            - --performance-schema-consumer-statements-digest=ON
+            # A second, independent record of slow statements, for cross-checking
+            # whatever the monitoring tooling reports.
+            - --slow-query-log=ON
+            - --long-query-time=1
+            - --log-queries-not-using-indexes=ON
+            - --min-examined-row-limit=100
+            # Two Rails apps x N pods x (Puma threads + Sidekiq) adds up.
+            - --max-connections=300
+            # Sized for a sandbox; not a sizing recommendation.
+            - --innodb-buffer-pool-size=536870912
+            - --default-time-zone=+00:00
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+              # Azure Disk volumes are formatted ext4 and contain lost+found,
+              # which makes mysqld --initialize refuse to run. Putting the data
+              # directory in a subdirectory of the volume avoids that.
+              subPath: mysql
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+          # First boot has to initialise the data directory and run the init
+          # script, so give it room before liveness starts counting.
+          startupProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysqladmin ping -h 127.0.0.1 -u root -p"$MYSQL_ROOT_PASSWORD" --silent
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysqladmin ping -h 127.0.0.1 -u root -p"$MYSQL_ROOT_PASSWORD" --silent
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysqladmin ping -h 127.0.0.1 -u root -p"$MYSQL_ROOT_PASSWORD" --silent
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+      volumes:
+        - name: init
+          configMap:
+            name: phr-mysql-init
+            defaultMode: 0755
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # managed-csi is the default Azure Disk (StandardSSD) storage class on
+        # AKS. Check `kubectl get storageclass` if this cluster differs.
+        storageClassName: managed-csi
+        resources:
+          requests:
+            storage: 20Gi

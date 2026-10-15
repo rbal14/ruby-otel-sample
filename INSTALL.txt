@@ -1,0 +1,909 @@
+==============================================================================
+POWER HOME REMODELING POC SANDBOX
+Installation and Deployment Instructions
+==============================================================================
+
+Target: an existing AKS cluster.
+Time:   about 20 minutes, most of it waiting on image builds and MySQL.
+Result: 7 workloads in namespace "power-poc", reachable on a public IP,
+        generating continuous traffic.
+
+This sandbox contains NO OpenTelemetry, NO OneAgent, and NO Dynatrace
+configuration. That is intentional. It is the uninstrumented baseline.
+
+
+------------------------------------------------------------------------------
+CONTENTS
+------------------------------------------------------------------------------
+
+  0.  What gets deployed
+  1.  Install local tooling
+  2.  Connect to the AKS cluster
+  3.  Check cluster capacity and storage
+  4.  Create the container registry and attach it
+  5.  Change the passwords
+  6.  Build and push the images
+  7.  Deploy to the cluster
+  8.  Verify the deployment
+  9.  Exercise the application
+  10. Day-to-day operations
+  11. Troubleshooting
+  12. Tear down
+  APPENDIX A. Deploying by hand, without the scripts
+  APPENDIX B. Running locally with Docker Compose
+  APPENDIX C. Environment variable reference
+
+
+------------------------------------------------------------------------------
+0. WHAT GETS DEPLOYED
+------------------------------------------------------------------------------
+
+Namespace: power-poc
+
+  phr-web       Deployment, 2 replicas. Rails 7.1 full-stack app (ERB views).
+                Owns the phr_web MySQL schema: customers, projects, products.
+                Gets leads and appointments by calling phr-api over HTTP.
+                Exposed through a LoadBalancer Service on port 80.
+
+  phr-api       Deployment, 2 replicas. Rails 7.1 API-only service.
+                Owns the phr_api MySQL schema: leads, appointments.
+                ClusterIP Service on port 3000. Not exposed publicly.
+
+  phr-worker    Deployment, 1 replica. Sidekiq 7. Same image as phr-web,
+                different arguments. Consumes from Redis, writes to MySQL,
+                calls phr-api.
+
+  mysql         StatefulSet, 1 replica, mysql:8.0. Both schemas on one
+                server, on a 20Gi Azure Disk. Includes a read-only
+                "dtmonitor" user.
+
+  redis         Deployment, 1 replica, redis:7-alpine. Sidekiq queue.
+                Ephemeral, no persistence.
+
+  phr-loadgen   Deployment, 1 replica, curlimages/curl. Continuous traffic
+                against phr-web and phr-api, including a steady trickle of
+                slow requests, N+1 query patterns, table scans, and 5xx.
+
+  Two run-once Jobs, phr-api-migrate and phr-web-migrate, create the tables
+  and load seed data. They finish and stay in Completed state.
+
+Resource requests total roughly 1.4 vCPU and 2.6Gi of memory.
+
+
+------------------------------------------------------------------------------
+1. INSTALL LOCAL TOOLING
+------------------------------------------------------------------------------
+
+Azure CLI and kubectl are required. Docker is NOT required -- the default
+build path builds inside Azure Container Registry.
+
+  brew install azure-cli kubernetes-cli
+
+Verify:
+
+  az version
+  kubectl version --client
+
+Optional, only if you want to build images on this machine instead of in
+Azure (see step 6, alternative path):
+
+  brew install --cask docker
+
+Note on Ruby: you do not need Ruby, Rails, or Bundler installed locally.
+Gems are resolved and installed inside the container image at build time.
+
+
+------------------------------------------------------------------------------
+2. CONNECT TO THE AKS CLUSTER
+------------------------------------------------------------------------------
+
+Log in and select the subscription:
+
+  az login
+  az account list --output table
+  az account set --subscription "<SUBSCRIPTION_NAME_OR_ID>"
+
+Set these once, so the rest of the steps can reuse them:
+
+  export RG="<RESOURCE_GROUP>"
+  export CLUSTER="<CLUSTER_NAME>"
+  export ACR_NAME="<REGISTRY_NAME>"
+
+ACR_NAME must be globally unique across all of Azure, and lowercase
+alphanumeric only. No hyphens, no underscores.
+
+Find the cluster if you are not sure of the name:
+
+  az aks list --output table
+
+Pull the kubeconfig credentials:
+
+  az aks get-credentials \
+    --resource-group "$RG" \
+    --name "$CLUSTER" \
+    --overwrite-existing
+
+Confirm kubectl is pointed at the right place:
+
+  kubectl config current-context
+  kubectl get nodes
+
+
+------------------------------------------------------------------------------
+3. CHECK CLUSTER CAPACITY AND STORAGE
+------------------------------------------------------------------------------
+
+You need roughly 2 vCPU and 3Gi of schedulable capacity free.
+
+  kubectl get nodes
+  kubectl describe nodes | grep -A 5 "Allocated resources"
+
+MySQL needs a storage class that can provision a ReadWriteOnce volume. The
+manifests ask for "managed-csi", which is the standard Azure Disk class on
+AKS.
+
+  kubectl get storageclass
+
+If managed-csi is not in that list, edit the storageClassName field near the
+bottom of k8s/20-mysql.yaml to match one that is. Look for:
+
+  storageClassName: managed-csi
+
+Do this BEFORE deploying. Changing it afterwards means deleting the
+PersistentVolumeClaim.
+
+
+------------------------------------------------------------------------------
+4. CREATE THE CONTAINER REGISTRY AND ATTACH IT
+------------------------------------------------------------------------------
+
+Registry naming rules, because the CLI reports them one at a time:
+
+  - lowercase letters and digits only
+  - no dashes, no underscores
+  - 5 to 50 characters
+  - globally unique across all of Azure
+
+So "ryanbalcerzak-power-acr" and "ryanbalcerzak_power_acr" are both
+rejected. "ryanbalcerzakpoweracr" is accepted.
+
+Create it in the same region as the cluster. A registry otherwise defaults
+to the resource group's region, which is not necessarily where the cluster
+runs, and cross-region pulls are slower and incur egress cost.
+
+  CLUSTER_REGION=$(az aks show -g "$RG" -n "$CLUSTER" --query location -o tsv)
+  echo "$CLUSTER_REGION"
+
+  az acr create \
+    --resource-group "$RG" \
+    --name "$ACR_NAME" \
+    --sku Basic \
+    --location "$CLUSTER_REGION"
+
+If you had to change the registry name to satisfy the rules above, re-export
+ACR_NAME now. Every later step reads it, and a stale value points at a
+registry that does not exist:
+
+  export ACR_NAME="<the name you actually created>"
+  az acr show -n "$ACR_NAME" --query name -o tsv
+
+Now let the cluster pull from it. Try the clean way first:
+
+  az aks update \
+    --resource-group "$RG" \
+    --name "$CLUSTER" \
+    --attach-acr "$ACR_NAME"
+
+That grants the cluster's kubelet identity the AcrPull role, and it needs
+Owner or User Access Administrator on the subscription. Where you hold only
+Contributor it fails with:
+
+  AAD role propagation failed[####################################]  100%
+  Could not create a role assignment for ACR.
+  Are you an Owner on this subscription?
+
+That is a permissions boundary, not a mistake on your part. Two ways
+forward.
+
+  OPTION A -- have someone with rights grant the single role assignment.
+  This is the cleaner end state: no admin credentials, nothing to rotate.
+  Collect the two values they need:
+
+    az aks show -g "$RG" -n "$CLUSTER" \
+      --query identityProfile.kubeletidentity.clientId -o tsv
+
+    az acr show -n "$ACR_NAME" --query id -o tsv
+
+  Then they run:
+
+    az role assignment create \
+      --assignee "<kubelet client id from above>" \
+      --role AcrPull \
+      --scope "<acr resource id from above>"
+
+  If that succeeds you are done with step 4. Skip Option B.
+
+  OPTION B -- registry admin credentials plus an image pull secret. Needs
+  no additional Azure rights. The admin user is off by default, so enable
+  it first:
+
+    az acr update --name "$ACR_NAME" --admin-enabled true
+    az acr credential show --name "$ACR_NAME"
+
+  Create the namespace and the secret. The name "acr-pull" matters: the
+  manifests already reference it, so do not rename it.
+
+    kubectl create namespace power-poc
+
+    kubectl -n power-poc create secret docker-registry acr-pull \
+      --docker-server="${ACR_NAME}.azurecr.io" \
+      --docker-username="$ACR_NAME" \
+      --docker-password="<passwords[0].value from the command above>"
+
+  The username is the registry name itself.
+
+  No manifest edits are needed. imagePullSecrets is already set on all five
+  workloads that use a private image: phr-api, phr-web, phr-worker, and the
+  two migration Jobs. The mysql, redis, and loadgen workloads pull public
+  images and deliberately do not reference the secret.
+
+VERIFYING THIS STEP
+
+Do not use "az aks check-acr" to verify Option B. It only tests the kubelet
+managed identity token exchange, which is exactly the thing you could not
+grant, and it knows nothing about image pull secrets. Under Option B it
+reports, correctly and harmlessly:
+
+  Validating image pull permission: FAILED
+  ACR ... rejected token exchange: ... 401 UNAUTHORIZED
+
+That is expected. It is not a blocker. The region warning it prints in the
+same output is worth reading, though.
+
+Verify Option B this way instead. Confirm the secret exists and has the
+right type:
+
+  kubectl -n power-poc get secret acr-pull
+
+  # NAME       TYPE                             DATA   AGE
+  # acr-pull   kubernetes.io/dockerconfigjson   1      1m
+
+Then, once the images are built in step 6, prove the whole manifest set is
+admissible on this cluster without creating anything. A server-side dry run
+executes every admission controller for real:
+
+  kubectl apply -k k8s/ --dry-run=server
+
+Expect "created (server dry run)" for every resource. A warning that the
+namespace is missing the last-applied-configuration annotation is normal if
+you created the namespace with "kubectl create namespace" in Option B.
+
+The conclusive proof is step 8: if the pods reach Running, the pull worked.
+
+------------------------------------------------------------------------------
+5. CHANGE THE PASSWORDS
+------------------------------------------------------------------------------
+
+The file k8s/10-secrets.yaml ships placeholder passwords in plain text.
+They are fine for a throwaway namespace on a private cluster. Change them
+now if the cluster is shared with anyone.
+
+IMPORTANT: MySQL only reads its passwords on the FIRST boot of an empty
+volume. Changing them after deploying means either tearing down the
+PersistentVolumeClaim or altering the users by hand. Do this before step 7.
+
+Generate a Rails secret:
+
+  ruby -rsecurerandom -e 'puts SecureRandom.hex(64)'
+
+That works with the macOS system Ruby, no install needed. Then edit
+k8s/10-secrets.yaml and replace these four values:
+
+  Secret phr-mysql-secrets:
+    MYSQL_ROOT_PASSWORD     root password for MySQL
+    MYSQL_PASSWORD          password for the application user "phr_app"
+    DT_MONITOR_PASSWORD     password for the read-only "dtmonitor" user
+
+  Secret phr-app-secrets:
+    SECRET_KEY_BASE         paste the value generated above
+
+Leave these alone unless you have a reason to change them, because other
+manifests reference them by value:
+
+  MYSQL_USER: phr_app
+  MYSQL_DATABASE: phr_web
+  WEB_DB_NAME: phr_web
+  API_DB_NAME: phr_api
+  DT_MONITOR_USER: dtmonitor
+
+
+------------------------------------------------------------------------------
+6. BUILD AND PUSH THE IMAGES
+------------------------------------------------------------------------------
+
+  ACR_NAME="$ACR_NAME" ./scripts/build-and-push.sh
+
+This runs "az acr build" for each app, which uploads the app directory and
+builds it inside ACR. Two reasons this is the default:
+
+  - No local Docker daemon is needed.
+  - The result is linux/amd64, which is what AKS nodes run. A local
+    "docker build" on an Apple Silicon Mac produces arm64 images, and those
+    fail on the cluster with "exec format error".
+
+Expect 3 to 6 minutes per image on the first build. There is no committed
+Gemfile.lock, so every build resolves gems fresh.
+
+To use a specific tag instead of the default v1:
+
+  ACR_NAME="$ACR_NAME" TAG=v2 ./scripts/build-and-push.sh
+
+Alternative path, building on this machine. Requires Docker running. The
+script forces --platform linux/amd64 for you:
+
+  ACR_NAME="$ACR_NAME" ./scripts/build-and-push.sh local
+
+Confirm the images landed:
+
+  az acr repository list --name "$ACR_NAME" --output table
+  az acr repository show-tags --name "$ACR_NAME" --repository phr-web
+  az acr repository show-tags --name "$ACR_NAME" --repository phr-api
+
+
+------------------------------------------------------------------------------
+7. DEPLOY TO THE CLUSTER
+------------------------------------------------------------------------------
+
+  ACR_NAME="$ACR_NAME" ./scripts/deploy.sh
+
+Use the same TAG you built with, if you overrode it:
+
+  ACR_NAME="$ACR_NAME" TAG=v2 ./scripts/deploy.sh
+
+What the script does, in order:
+
+  1. Copies k8s/ to a temporary directory and rewrites the placeholder
+     registry name to yours. Your working copy is not modified.
+  2. Deletes any previous migration Jobs. Kubernetes Jobs are immutable, so
+     they have to be removed before they can run again.
+  3. Runs "kubectl apply -k" on the rendered directory. This creates the
+     namespace, secrets, MySQL, Redis, both apps, the worker, and the load
+     generator.
+  4. Waits for the MySQL StatefulSet to become ready.
+  5. Waits for phr-api-migrate and phr-web-migrate to complete. These create
+     the tables and load seed data: 400 leads and appointments in phr_api,
+     150 customers and about 300 projects in phr_web.
+  6. Waits for all four Deployments to roll out.
+  7. Polls for the LoadBalancer address and prints the URL.
+
+First run takes 5 to 10 minutes. Most of that is MySQL initialising its data
+directory and Azure provisioning a public IP.
+
+The script exits non-zero and dumps the Job logs if a migration fails.
+
+The application pods will briefly show as not ready while MySQL starts.
+That is expected: their entrypoint waits for MySQL to answer before Rails
+boots.
+
+
+------------------------------------------------------------------------------
+8. VERIFY THE DEPLOYMENT
+------------------------------------------------------------------------------
+
+  kubectl -n power-poc get pods
+
+Expected steady state:
+
+  NAME                           READY   STATUS      RESTARTS
+  mysql-0                        1/1     Running     0
+  redis-xxxxxxxxxx-xxxxx         1/1     Running     0
+  phr-api-xxxxxxxxxx-xxxxx       1/1     Running     0
+  phr-api-xxxxxxxxxx-yyyyy       1/1     Running     0
+  phr-web-xxxxxxxxxx-xxxxx       1/1     Running     0
+  phr-web-xxxxxxxxxx-yyyyy       1/1     Running     0
+  phr-worker-xxxxxxxxxx-xxxxx    1/1     Running     0
+  phr-loadgen-xxxxxxxxxx-xxxxx   1/1     Running     0
+  phr-api-migrate-xxxxx          0/1     Completed   0
+  phr-web-migrate-xxxxx          0/1     Completed   0
+
+The two Completed pods are correct. They are finished Jobs, not failures.
+They disappear on their own after an hour.
+
+Get the public address:
+
+  IP=$(kubectl -n power-poc get svc phr-web \
+    -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+  echo "$IP"
+
+Check the health endpoints:
+
+  curl -s "http://${IP}/health"; echo
+  curl -s "http://${IP}/ready";  echo
+
+/health should return:
+
+  {"status":"ok","service":"phr-web","env":"production", ...}
+
+/ready should return, and this is the one that matters, because it proves
+both backing stores are reachable from the pod:
+
+  {"status":"ready","database":"up","redis":"up"}
+
+Open the application:
+
+  open "http://${IP}/"           dashboard
+  open "http://${IP}/sidekiq"    Sidekiq queues and job history
+
+If there is no external IP, either the cluster has no public LoadBalancer
+support or provisioning is still in progress. Watch it:
+
+  kubectl -n power-poc get svc phr-web -w
+
+Or bypass it entirely:
+
+  kubectl -n power-poc port-forward svc/phr-web 8080:80
+
+Then use http://localhost:8080/ instead.
+
+Confirm the load generator is driving traffic:
+
+  kubectl -n power-poc logs -l app=phr-loadgen --tail=20
+
+You should see lines like:
+
+  13:42:07 GET  web /                     200 0.087
+  13:42:07 GET  web /customers            200 0.121
+  13:42:08 GET  api /leads/stats          200 0.244
+
+Confirm the worker is consuming jobs:
+
+  kubectl -n power-poc logs -l app=phr-worker --tail=20
+
+You should see "scored lead=..." and occasionally "provisioned project=..."
+lines.
+
+Confirm both MySQL schemas exist and the monitoring user was created:
+
+  kubectl -n power-poc exec -it mysql-0 -- sh -c \
+    'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "SHOW DATABASES;"'
+
+  kubectl -n power-poc exec -it mysql-0 -- sh -c \
+    'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" \
+     -e "SELECT user, host, plugin FROM mysql.user ORDER BY user;"'
+
+Both users should show plugin "mysql_native_password".
+
+Confirm row counts:
+
+  kubectl -n power-poc exec -it mysql-0 -- sh -c \
+    'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "
+       SELECT COUNT(*) AS leads FROM phr_api.leads;
+       SELECT COUNT(*) AS appointments FROM phr_api.appointments;
+       SELECT COUNT(*) AS customers FROM phr_web.customers;
+       SELECT COUNT(*) AS projects FROM phr_web.projects;"'
+
+
+------------------------------------------------------------------------------
+9. EXERCISE THE APPLICATION
+------------------------------------------------------------------------------
+
+All paths below are relative to http://<IP>/
+
+Normal application pages:
+
+  /                        Dashboard. Aggregate queries against phr_web,
+                           plus one HTTP call out to phr-api.
+  /customers               Paginated list, filterable by state.
+  /customers/1             Detail page with the customer's projects.
+  /customers/new           Form. A write path with CSRF, unlike the rest.
+  /projects                Paginated list, filterable by status.
+  /projects/1              Detail page.
+  /leads                   Served entirely by phr-api over HTTP.
+  /leads/1                 Same, with the lead's appointments.
+  /appointments            Same.
+  /sidekiq                 Sidekiq dashboard: queue depth, retries, history.
+  /health                  Liveness. Does not touch MySQL.
+  /ready                   Readiness. Checks MySQL and Redis.
+
+Application-side misbehaviour, served by phr-web:
+
+  /debug/slow?seconds=3            Slow response, app sleeping, DB idle.
+  /debug/error                     Unhandled exception, returns 500.
+  /debug/n_plus_one?limit=100      About 100 sequential queries in one
+                                   request.
+  /debug/downstream?mode=slow      Slowness originating in phr-api.
+  /debug/downstream?mode=error     502, caused by a 500 in phr-api.
+
+Database-side misbehaviour, served by phr-api. Reach these through a
+port-forward, since phr-api is not publicly exposed:
+
+  kubectl -n power-poc port-forward svc/phr-api 3001:3000
+
+Then, against http://localhost:3001/
+
+  /api/v1/leads                              Paginated JSON list.
+  /api/v1/leads/stats                        GROUP BY / AVG / SUM rollup.
+                                             The heaviest legitimate query.
+  /api/v1/appointments                       Paginated JSON list.
+  /api/v1/simulate/slow_query?seconds=2      SELECT SLEEP(2). Slow inside
+                                             MySQL, not in Ruby.
+  /api/v1/simulate/table_scan?term=roof      Leading-wildcard LIKE on an
+                                             unindexed TEXT column. Returns
+                                             the EXPLAIN output in the JSON.
+  /api/v1/simulate/n_plus_one?limit=100      N+1 at the API tier.
+  /api/v1/simulate/cpu?ms=800                CPU burn in Ruby, no I/O.
+  /api/v1/simulate/error                     Unhandled exception, 500.
+
+The full cross-service write path. Worth triggering by hand at least once:
+
+  curl -sS -X POST "http://${IP}/internal/leads" | python3 -m json.tool
+
+That single request touches, in order:
+
+  phr-web       receives the HTTP POST
+  phr-api       HTTP call out, INSERT into phr_api.leads
+  redis         LeadScoringJob enqueued
+  phr-worker    dequeues the job
+  phr-api       HTTP call, reads the lead, UPDATE with the score
+  phr_web       if the lead scores high enough, a second job writes a
+                customer and a project into the phr_web schema
+
+It is the single best test of whether context survives every hop. No request
+body is needed; a plausible lead is generated if you do not supply one.
+
+
+------------------------------------------------------------------------------
+10. DAY-TO-DAY OPERATIONS
+------------------------------------------------------------------------------
+
+Logs:
+
+  kubectl -n power-poc logs -l app=phr-web    --tail=100 -f
+  kubectl -n power-poc logs -l app=phr-api    --tail=100 -f
+  kubectl -n power-poc logs -l app=phr-worker --tail=100 -f
+  kubectl -n power-poc logs -l app=phr-loadgen --tail=50  -f
+  kubectl -n power-poc logs mysql-0 --tail=100
+
+Shell into a Rails pod:
+
+  kubectl -n power-poc exec -it deploy/phr-web -- bash
+  kubectl -n power-poc exec -it deploy/phr-web -- bundle exec rails console
+  kubectl -n power-poc exec -it deploy/phr-api -- bundle exec rails console
+
+MySQL prompt, using the root password from the Secret:
+
+  kubectl -n power-poc exec -it mysql-0 -- \
+    mysql -uroot -p"$(kubectl -n power-poc get secret phr-mysql-secrets \
+      -o jsonpath='{.data.MYSQL_ROOT_PASSWORD}' | base64 -d)"
+
+The MySQL client is also present in both application images, so you can
+connect from an app pod to test connectivity from where it matters:
+
+  kubectl -n power-poc exec -it deploy/phr-web -- sh -c \
+    'mysql -h "$DB_HOST" -u "$DB_USERNAME" -p"$DB_PASSWORD" \
+     -e "SELECT 1;" "$DB_NAME"'
+
+Turn traffic off and on. Useful for establishing a quiet baseline:
+
+  kubectl -n power-poc scale deploy/phr-loadgen --replicas=0
+  kubectl -n power-poc scale deploy/phr-loadgen --replicas=1
+
+Turn the traffic up. Edit INTERVAL_SECONDS in k8s/60-loadgen.yaml, or
+override it live:
+
+  kubectl -n power-poc set env deploy/phr-loadgen INTERVAL_SECONDS=1
+
+Scale the application tier. Note that each pod holds
+WEB_CONCURRENCY x RAILS_MAX_THREADS MySQL connections, which is 10 by
+default, against a server limit of 300:
+
+  kubectl -n power-poc scale deploy/phr-api --replicas=4
+  kubectl -n power-poc scale deploy/phr-web --replicas=4
+  kubectl -n power-poc scale deploy/phr-worker --replicas=3
+
+Restart a workload:
+
+  kubectl -n power-poc rollout restart deploy/phr-web
+
+Deploy a new image build:
+
+  ACR_NAME="$ACR_NAME" TAG=v2 ./scripts/build-and-push.sh
+  ACR_NAME="$ACR_NAME" TAG=v2 ./scripts/deploy.sh
+
+Re-run migrations and seeds on their own. The Jobs are immutable, so they
+must be deleted first. Seeds are idempotent, keyed on email and SKU, so
+re-running does not duplicate data:
+
+  kubectl -n power-poc delete job phr-api-migrate phr-web-migrate \
+    --ignore-not-found
+  ACR_NAME="$ACR_NAME" ./scripts/deploy.sh
+
+Watch resource consumption, if metrics-server is installed:
+
+  kubectl -n power-poc top pods
+
+
+------------------------------------------------------------------------------
+11. TROUBLESHOOTING
+------------------------------------------------------------------------------
+
+Pods stuck in ImagePullBackOff or ErrImagePull
+  The registry is not attached, or the tag does not exist.
+
+    kubectl -n power-poc describe pod <pod-name> | tail -20
+    az acr repository show-tags --name "$ACR_NAME" --repository phr-web
+
+  If the error mentions unauthorized, re-run the attach from step 4:
+
+    az aks update -g "$RG" -n "$CLUSTER" --attach-acr "$ACR_NAME"
+
+"exec format error" in the application logs
+  An arm64 image on amd64 nodes. Rebuild using the default ACR path:
+
+    ACR_NAME="$ACR_NAME" ./scripts/build-and-push.sh
+
+mysql-0 never becomes ready
+  Almost always storage.
+
+    kubectl -n power-poc get pvc
+    kubectl -n power-poc describe pod mysql-0 | tail -20
+
+  If the PVC is Pending, the storageClassName in k8s/20-mysql.yaml does not
+  match anything on this cluster. See step 3. You will need to delete the
+  namespace and start over after fixing it.
+
+  If MySQL logs complain that the data directory has files in it, the
+  subPath in the volume mount was removed. It must stay: Azure Disks are
+  ext4 and contain lost+found, which makes mysqld --initialize refuse to
+  run on the mount root.
+
+Migration Job shows Error or BackoffLimitExceeded
+
+    kubectl -n power-poc logs job/phr-api-migrate
+    kubectl -n power-poc logs job/phr-web-migrate
+
+  "Access denied for user" means the MySQL passwords in 10-secrets.yaml
+  were changed after the volume had already been initialised. MySQL only
+  reads them on first boot. Either put the original values back, or tear
+  down and redeploy:
+
+    ./scripts/teardown.sh
+    ACR_NAME="$ACR_NAME" ./scripts/deploy.sh
+
+  "Unknown database" means the MySQL init script did not run. It only runs
+  on a fresh volume. Check:
+
+    kubectl -n power-poc logs mysql-0 | grep "\[init\]"
+
+Application pods are Running and ready, but pages return 500
+  The migration Jobs have not finished, so the tables do not exist.
+
+    kubectl -n power-poc get jobs
+
+Pods stuck in CrashLoopBackOff with a Rails boot error
+  Usually a missing SECRET_KEY_BASE. Rails refuses to boot in production
+  without it.
+
+    kubectl -n power-poc logs <pod-name> --previous | tail -30
+    kubectl -n power-poc get secret phr-app-secrets -o yaml
+
+Leads and Appointments pages show "Leads service unavailable"
+  This is the intended degraded state: phr-web is healthy and phr-api is
+  not. The page itself lists what to check.
+
+    kubectl -n power-poc get pods -l app=phr-api
+    kubectl -n power-poc logs -l app=phr-api --tail=50
+
+  Also confirm PHR_API_URL in k8s/30-app-config.yaml matches the Service
+  name. It should be http://phr-api:3000
+
+Sidekiq queue grows and nothing drains it
+
+    kubectl -n power-poc logs -l app=phr-worker --tail=50
+    kubectl -n power-poc exec deploy/redis -- redis-cli ping
+
+  Also check that /ready on phr-web reports "redis":"up".
+
+Authentication plugin errors from MySQL
+  MySQL runs with --default-authentication-plugin=mysql_native_password on
+  purpose. The mysql2 gem links against libmariadb, and MySQL 8's default
+  caching_sha2_password handshake is the most common failure in that
+  pairing. If you change the MySQL image to 8.4 or later, that flag no
+  longer exists and this needs revisiting.
+
+Azure Policy / Gatekeeper is installed on the cluster
+  A gatekeeper-system namespace means the AKS Azure Policy add-on is on.
+  Check whether any constraint actually blocks admission, rather than just
+  auditing:
+
+    kubectl get constraints \
+      -o jsonpath='{range .items[*]}{.spec.enforcementAction}{"\n"}{end}' \
+      | sort | uniq -c
+
+  If every value is "dryrun" then constraints only report violations and
+  nothing gets rejected. If any say "deny", read that constraint before
+  deploying. The two most likely to matter here are a read-only root
+  filesystem rule and an allowed-users-groups rule, because the mysql:8.0
+  entrypoint must start as root before dropping to the mysql user.
+
+  To see what would be rejected, without creating anything:
+
+    kubectl apply -k k8s/ --dry-run=server
+
+Everything looks fine but there is no traffic
+
+    kubectl -n power-poc get deploy phr-loadgen
+    kubectl -n power-poc logs -l app=phr-loadgen --tail=30
+
+  The generator never exits on a failed request, by design, so an empty log
+  means the pod is not running rather than that requests are failing.
+
+
+------------------------------------------------------------------------------
+12. TEAR DOWN
+------------------------------------------------------------------------------
+
+  ./scripts/teardown.sh
+
+It asks you to type the namespace name to confirm, then deletes the
+namespace. The PersistentVolumeClaim goes with it, and so does the Azure
+disk behind it. The MySQL data is not recoverable afterwards.
+
+To remove the registry as well:
+
+  az acr delete --resource-group "$RG" --name "$ACR_NAME"
+
+To detach the registry from the cluster but keep both:
+
+  az aks update --resource-group "$RG" --name "$CLUSTER" \
+    --detach-acr "$ACR_NAME"
+
+
+==============================================================================
+APPENDIX A. DEPLOYING BY HAND, WITHOUT THE SCRIPTS
+==============================================================================
+
+If you would rather run each step yourself, or the scripts fail and you want
+to see where.
+
+Point the image transformer at your registry. This edits your working copy,
+unlike the deploy script:
+
+  sed -i '' "s/REPLACE_WITH_ACR/${ACR_NAME}/" k8s/kustomization.yaml
+
+Confirm the substitution:
+
+  grep newName k8s/kustomization.yaml
+
+Preview the full rendered output without applying anything:
+
+  kubectl kustomize k8s/ | less
+
+Apply:
+
+  kubectl apply -k k8s/
+
+Wait for MySQL:
+
+  kubectl -n power-poc rollout status statefulset/mysql --timeout=600s
+
+Run the migrations. They are already part of the apply, so they should be
+running:
+
+  kubectl -n power-poc wait --for=condition=complete \
+    job/phr-api-migrate --timeout=600s
+  kubectl -n power-poc wait --for=condition=complete \
+    job/phr-web-migrate --timeout=600s
+
+Wait for the applications:
+
+  kubectl -n power-poc rollout status deploy/phr-api    --timeout=300s
+  kubectl -n power-poc rollout status deploy/phr-web    --timeout=300s
+  kubectl -n power-poc rollout status deploy/phr-worker --timeout=300s
+
+Get the address:
+
+  kubectl -n power-poc get svc phr-web -w
+
+Note that "kubectl apply -k" is required rather than "kubectl apply -f".
+Three ConfigMaps are generated from real files on disk, so a plain -f apply
+would leave out the MySQL bootstrap script and the traffic generator script.
+
+
+==============================================================================
+APPENDIX B. RUNNING LOCALLY WITH DOCKER COMPOSE
+==============================================================================
+
+Requires Docker Desktop. Same images, same environment variables, same MySQL
+bootstrap script as the cluster deployment. Useful for checking a change
+before pushing to ACR.
+
+  brew install --cask docker
+  open -a Docker            wait for it to finish starting
+
+Bring the stack up. Migrations and seeds run as one-shot services that the
+application services wait on, so this gets you a populated database:
+
+  docker compose up --build
+
+  phr-web    http://localhost:3000
+  phr-api    http://localhost:3001
+  mysql      localhost:3306
+  redis      localhost:6379
+
+Add continuous traffic:
+
+  docker compose --profile loadgen up -d
+
+Follow logs:
+
+  docker compose logs -f web
+  docker compose logs -f worker
+  docker compose logs -f api
+
+Run a Rails console:
+
+  docker compose exec web bundle exec rails console
+
+Connect to MySQL:
+
+  docker compose exec mysql mysql -uroot -ppoc-root-pw-change-me
+
+Wipe everything, MySQL volume included:
+
+  docker compose down -v
+
+To override the default passwords or seed sizes locally, copy .env.example
+to .env and edit it. Compose reads .env automatically; the cluster
+deployment does not use it at all.
+
+
+==============================================================================
+APPENDIX C. ENVIRONMENT VARIABLE REFERENCE
+==============================================================================
+
+Both applications read all configuration from the environment, so behaviour
+can be changed without rebuilding an image. Set in k8s/30-app-config.yaml
+unless noted.
+
+  RAILS_ENV                  production
+  RAILS_LOG_LEVEL            info. Set to debug to see every SQL statement.
+  RAILS_SHOW_EXCEPTIONS      Not set by default. Set to "true" on a pod to
+                             get the full Rails error page instead of a
+                             generic 500. Useful while wiring things up:
+                               kubectl -n power-poc set env deploy/phr-web \
+                                 RAILS_SHOW_EXCEPTIONS=true
+
+  DB_HOST                    mysql
+  DB_PORT                    3306
+  DB_NAME                    Per workload, from the Secret. phr_web for
+                             phr-web and phr-worker, phr_api for phr-api.
+  DB_USERNAME                From the Secret. phr_app.
+  DB_PASSWORD                From the Secret.
+
+  WEB_CONCURRENCY            2. Puma worker processes per pod.
+  RAILS_MAX_THREADS          5. Puma threads per worker, and the
+                             ActiveRecord connection pool size.
+                             Per-pod MySQL connections is the product of
+                             these two.
+
+  PHR_API_URL                http://phr-api:3000
+  PHR_API_TIMEOUT_SECONDS    5. Open and read timeout on calls from phr-web
+                             and phr-worker to phr-api.
+
+  REDIS_URL                  redis://redis:6379/0
+  SIDEKIQ_CONCURRENCY        5. Worker threads in phr-worker.
+
+  SECRET_KEY_BASE            From the phr-app-secrets Secret. Required;
+                             Rails will not boot in production without it.
+
+  SEED_LEAD_COUNT            400. Set on the phr-api-migrate Job only.
+  SEED_CUSTOMER_COUNT        150. Set on the phr-web-migrate Job only.
+
+  WAIT_FOR_DB                Defaults to true. The container entrypoint
+                             blocks until MySQL answers before starting
+                             Rails. Set to "false" to disable that wait.
+
+==============================================================================
+END
+==============================================================================

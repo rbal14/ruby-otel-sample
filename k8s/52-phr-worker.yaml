@@ -1,0 +1,76 @@
+# Sidekiq. Same image as phr-web, different command -- which is how most Rails
+# shops ship their workers, and it means the worker and the web tier share a
+# code path while running as separate workloads.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: phr-worker
+  namespace: power-poc
+  labels:
+    app: phr-worker
+    app.kubernetes.io/name: phr-worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: power-poc
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: phr-worker
+  template:
+    metadata:
+      labels:
+        app: phr-worker
+        app.kubernetes.io/name: phr-worker
+        app.kubernetes.io/component: worker
+        app.kubernetes.io/part-of: power-poc
+    spec:
+      terminationGracePeriodSeconds: 30
+      imagePullSecrets:
+         - name: acr-pull
+      containers:
+        - name: sidekiq
+          image: phr-web
+          imagePullPolicy: IfNotPresent
+          # args, so the ENTRYPOINT still waits for MySQL before Sidekiq boots.
+          args: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+          envFrom:
+            - configMapRef:
+                name: phr-app-config
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: "phr-worker"
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef: { name: phr-mysql-secrets, key: WEB_DB_NAME }
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef: { name: phr-mysql-secrets, key: MYSQL_USER }
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: phr-mysql-secrets, key: MYSQL_PASSWORD }
+            - name: SECRET_KEY_BASE
+              valueFrom:
+                secretKeyRef: { name: phr-app-secrets, key: SECRET_KEY_BASE }
+          # Sidekiq serves no HTTP, so liveness just confirms the process is
+          # still there. Kill the pod and the queue drains on the next one.
+          livenessProbe:
+            exec:
+              command: ["pgrep", "-f", "sidekiq"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 150m
+              memory: 320Mi
+            limits:
+              cpu: 500m
+              memory: 640Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop: ["ALL"]

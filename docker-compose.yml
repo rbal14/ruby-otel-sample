@@ -1,0 +1,167 @@
+# Local sandbox. Same images, same env vars, same MySQL bootstrap scripts as
+# the AKS deployment, so anything that works here should work there.
+#
+#   docker compose up --build              # web on :3000, api on :3001
+#   docker compose --profile loadgen up -d # add continuous traffic
+#   docker compose down -v                 # wipe, including the MySQL volume
+name: power-poc
+
+x-rails-env: &rails-env
+  RAILS_ENV: production
+  RAILS_LOG_LEVEL: ${RAILS_LOG_LEVEL:-info}
+  RAILS_LOG_TO_STDOUT: "true"
+  SECRET_KEY_BASE: ${SECRET_KEY_BASE:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+  DB_HOST: mysql
+  DB_PORT: "3306"
+  DB_USERNAME: ${MYSQL_USER:-phr_app}
+  DB_PASSWORD: ${MYSQL_PASSWORD:-poc-app-pw-change-me}
+  WEB_CONCURRENCY: "2"
+  RAILS_MAX_THREADS: "5"
+  REDIS_URL: redis://redis:6379/0
+  PHR_API_URL: http://api:3000
+  PHR_API_TIMEOUT_SECONDS: "5"
+
+services:
+  mysql:
+    image: mysql:8.0
+    # Kept in step with the args in k8s/20-mysql.yaml.
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+      - --performance-schema=ON
+      - --performance-schema-consumer-events-statements-current=ON
+      - --performance-schema-consumer-events-statements-history=ON
+      - --performance-schema-consumer-statements-digest=ON
+      - --slow-query-log=ON
+      - --long-query-time=1
+      - --log-queries-not-using-indexes=ON
+      - --min-examined-row-limit=100
+      - --max-connections=300
+      - --innodb-buffer-pool-size=536870912
+      - --default-time-zone=+00:00
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-poc-root-pw-change-me}
+      MYSQL_DATABASE: ${WEB_DB_NAME:-phr_web}
+      MYSQL_USER: ${MYSQL_USER:-phr_app}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-poc-app-pw-change-me}
+      WEB_DB_NAME: ${WEB_DB_NAME:-phr_web}
+      API_DB_NAME: ${API_DB_NAME:-phr_api}
+      DT_MONITOR_USER: ${DT_MONITOR_USER:-dtmonitor}
+      DT_MONITOR_PASSWORD: ${DT_MONITOR_PASSWORD:-poc-monitor-pw-change-me}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # The same files the Kubernetes ConfigMaps are generated from.
+      - ./k8s/mysql-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api-migrate:
+    build: ./apps/phr-api
+    environment:
+      <<: *rails-env
+      DB_NAME: ${API_DB_NAME:-phr_api}
+      SEED_LEAD_COUNT: ${SEED_LEAD_COUNT:-400}
+    command: ["/bin/bash", "-c", "bundle exec rails db:migrate && bundle exec rails db:seed"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: ./apps/phr-api
+    environment:
+      <<: *rails-env
+      DB_NAME: ${API_DB_NAME:-phr_api}
+    ports:
+      - "3001:3000"
+    depends_on:
+      api-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+
+  web-migrate:
+    build: ./apps/phr-web
+    environment:
+      <<: *rails-env
+      DB_NAME: ${WEB_DB_NAME:-phr_web}
+      SEED_CUSTOMER_COUNT: ${SEED_CUSTOMER_COUNT:-150}
+    command: ["/bin/bash", "-c", "bundle exec rails db:migrate && bundle exec rails db:seed"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    build: ./apps/phr-web
+    environment:
+      <<: *rails-env
+      DB_NAME: ${WEB_DB_NAME:-phr_web}
+    ports:
+      - "3000:3000"
+    depends_on:
+      web-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+
+  worker:
+    build: ./apps/phr-web
+    environment:
+      <<: *rails-env
+      DB_NAME: ${WEB_DB_NAME:-phr_web}
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+    depends_on:
+      web-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  loadgen:
+    image: curlimages/curl:8.11.1
+    profiles: ["loadgen"]
+    # ENTRYPOINT is ["curl"] in this image; replace it.
+    entrypoint: ["sh"]
+    command: ["/scripts/traffic.sh"]
+    environment:
+      WEB_URL: http://web:3000
+      API_URL: http://api:3000
+      INTERVAL_SECONDS: "3"
+    volumes:
+      - ./k8s/loadgen:/scripts:ro
+    depends_on:
+      web:
+        condition: service_healthy
+
+volumes:
+  mysql-data:

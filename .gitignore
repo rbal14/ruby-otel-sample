@@ -1,0 +1,11 @@
+.env
+*.log
+apps/*/log/*
+!apps/*/log/.keep
+apps/*/tmp/*
+!apps/*/tmp/pids
+apps/*/tmp/pids/*
+!apps/*/tmp/pids/.keep
+apps/*/.bundle
+apps/*/vendor/bundle
+.DS_Store

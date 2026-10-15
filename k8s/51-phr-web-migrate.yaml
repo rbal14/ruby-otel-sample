@@ -1,0 +1,56 @@
+# Runs migrations and (idempotent) seeds for the phr_web schema.
+#   kubectl -n power-poc delete job phr-web-migrate --ignore-not-found
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: phr-web-migrate
+  namespace: power-poc
+  labels:
+    app: phr-web-migrate
+    app.kubernetes.io/part-of: power-poc
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: phr-web-migrate
+        app.kubernetes.io/part-of: power-poc
+    spec:
+      restartPolicy: OnFailure
+      imagePullSecrets:
+         - name: acr-pull
+      containers:
+        - name: migrate
+          image: phr-web
+          imagePullPolicy: IfNotPresent
+          # args (not command) so the image ENTRYPOINT still runs -- that is what
+          # waits for MySQL to answer before the migration starts.
+          args:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              bundle exec rails db:migrate
+              bundle exec rails db:seed
+          envFrom:
+            - configMapRef:
+                name: phr-app-config
+          env:
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef: { name: phr-mysql-secrets, key: WEB_DB_NAME }
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef: { name: phr-mysql-secrets, key: MYSQL_USER }
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: phr-mysql-secrets, key: MYSQL_PASSWORD }
+            - name: SECRET_KEY_BASE
+              valueFrom:
+                secretKeyRef: { name: phr-app-secrets, key: SECRET_KEY_BASE }
+            - name: SEED_CUSTOMER_COUNT
+              value: "150"
+          resources:
+            requests: { cpu: 200m, memory: 384Mi }
+            limits:   { cpu: "1", memory: 768Mi }

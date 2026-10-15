@@ -1,0 +1,44 @@
+# Non-secret configuration shared by both Rails apps. Passwords come from the
+# Secrets in 10-secrets.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: phr-app-config
+  namespace: power-poc
+  labels:
+    app.kubernetes.io/part-of: power-poc
+data:
+  RAILS_ENV: "production"
+  RAILS_LOG_LEVEL: "info"
+  RAILS_LOG_TO_STDOUT: "true"
+
+  # Both apps reach MySQL through the headless Service in this namespace.
+  DB_HOST: "mysql"
+  DB_PORT: "3306"
+
+  # Puma sizing. Threads x workers is the per-pod connection count against
+  # MySQL, which matters once you start scaling replicas.
+  WEB_CONCURRENCY: "2"
+  RAILS_MAX_THREADS: "5"
+
+  # phr-web -> phr-api. Cluster-internal Service DNS.
+  PHR_API_URL: "http://phr-api:3000"
+  PHR_API_TIMEOUT_SECONDS: "5"
+
+  # Sidekiq
+  REDIS_URL: "redis://redis:6379/0"
+  SIDEKIQ_CONCURRENCY: "5"
+
+  #OpenTelemetry
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://telemetry-ingest.dynatrace:4318"
+  OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
+  OTEL_TRACES_EXPORTER: "otlp"
+
+  # Metrics and logs: the Dynatrace walkthrough notes that the Ruby SDK does
+  # not yet have stable metrics or logs support. Leave them off, and keep
+  # getting container logs from the logMonitoring DaemonSet you already run.
+  OTEL_METRICS_EXPORTER: "none"
+  OTEL_LOGS_EXPORTER: "none"
+
+  # Applies to every workload. Per-workload service.name is set in 5b.
+  OTEL_RESOURCE_ATTRIBUTES: "service.namespace=power-poc,deployment.environment=poc"

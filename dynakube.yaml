@@ -1,0 +1,68 @@
+apiVersion: v1
+data:
+  apiToken: ZHQwczE2LlhLUlMySElYLkhENDRSU0xGQ1o3R1lNTklGQ1BNUEdBWFJWUEZDVVY0VUJKSFdFR0taM1hGN0VER0o1RUw1U1M3NjQ2NUQ3UkI=
+  dataIngestToken: ZHQwYzAxLjdHSTROT1JDRFJBQzNHT01FRE5WRlRUTS42S0ZWTUxST1FVMlVSWEtMNVhMNlRXSVdHR1A0R0JTSzdGSUhVRUFZVUhVWFhPT080Mk9IVEtWTVdTS1BNUlFK
+kind: Secret
+metadata:
+  name: power-poc
+  namespace: dynatrace
+  labels:
+    dynatrace.com/created-by: "dynatrace.kubernetes"
+type: Opaque
+---
+apiVersion: dynatrace.com/v1beta6
+kind: DynaKube
+metadata:
+  name: power-poc
+  namespace: dynatrace
+  annotations:
+    feature.dynatrace.com/use-public-registry: "true"
+  labels:
+    dynatrace.com/created-by: "dynatrace.kubernetes"
+# Link to api reference for further information: https://docs.dynatrace.com/docs/ingest-from/setup-on-k8s/reference/dynakube-parameters
+spec:
+  apiUrl: https://xxt49926.sprint.dynatracelabs.com/api
+  metadataEnrichment:
+    enabled: true
+  activeGate:
+    image: public.ecr.aws/dynatrace/dynatrace-activegate:1.337.28.20260501-093315
+    capabilities:
+      - kubernetes-monitoring
+    resources:
+      requests:
+        cpu: 200m
+        memory: 6Gi
+      limits:
+        cpu: 1000m
+        memory: 6Gi
+    replicas: 1
+  templates:
+    otelCollector:
+      imageRef:
+        repository: public.ecr.aws/dynatrace/dynatrace-otel-collector
+        tag: latest
+    kspmNodeConfigurationCollector:
+      imageRef:
+        repository: public.ecr.aws/dynatrace/dynatrace-k8s-node-config-collector
+        tag: 1.5.12
+    logMonitoring:
+      imageRef:
+        repository: public.ecr.aws/dynatrace/dynatrace-logmodule
+        tag: 1.341.89.20260907-112744
+  logMonitoring: {}
+  kspm:
+    mappedHostPaths:
+      - /boot
+      - /etc
+      - /proc/sys/kernel
+      - /sys/fs
+      - /sys/kernel/security/apparmor
+      - /usr/lib/systemd/system
+      - /var/lib
+  telemetryIngest:
+    protocols:
+      - jaeger
+      - otlp
+      - statsd
+      - zipkin
+    serviceName: telemetry-ingest

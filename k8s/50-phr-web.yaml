@@ -1,0 +1,102 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: phr-web
+  namespace: power-poc
+  labels:
+    app: phr-web
+    app.kubernetes.io/name: phr-web
+    app.kubernetes.io/part-of: power-poc
+  annotations:
+    # For a private cluster, uncomment to get an internal-only ILB address:
+    # service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+    service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path: /health
+spec:
+  # AKS provisions a public IP for this. Swap to ClusterIP and use
+  # `kubectl port-forward` if you would rather not expose it.
+  type: LoadBalancer
+  selector:
+    app: phr-web
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: phr-web
+  namespace: power-poc
+  labels:
+    app: phr-web
+    app.kubernetes.io/name: phr-web
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: power-poc
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: phr-web
+  template:
+    metadata:
+      labels:
+        app: phr-web
+        app.kubernetes.io/name: phr-web
+        app.kubernetes.io/component: frontend
+        app.kubernetes.io/part-of: power-poc
+    spec:
+      imagePullSecrets:
+         - name: acr-pull
+      containers:
+        - name: phr-web
+          image: phr-web
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: phr-app-config
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: "phr-web"
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef: { name: phr-mysql-secrets, key: WEB_DB_NAME }
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef: { name: phr-mysql-secrets, key: MYSQL_USER }
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: phr-mysql-secrets, key: MYSQL_PASSWORD }
+            - name: SECRET_KEY_BASE
+              valueFrom:
+                secretKeyRef: { name: phr-app-secrets, key: SECRET_KEY_BASE }
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /ready, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 384Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop: ["ALL"]

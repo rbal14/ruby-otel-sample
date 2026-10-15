@@ -1,0 +1,41 @@
+<% content_for :title, "Customers" %>
+<h1>Customers</h1>
+<p class="sub"><%= number_with_delimiter @total %> total &middot; page <%= @page %></p>
+
+<div class="toolbar">
+  <%= form_with url: customers_path, method: :get, local: true do %>
+    <%= select_tag :state,
+          options_for_select([["All states", ""]] + @states.map { |s| [s, s] }, params[:state]),
+          onchange: "this.form.requestSubmit()" %>
+  <% end %>
+  <%= link_to "New customer", new_customer_path, class: "btn" %>
+</div>
+
+<div class="panel">
+  <table>
+    <thead>
+      <tr><th>Name</th><th>Email</th><th>City</th><th>State</th><th>Branch</th><th class="num">Projects</th></tr>
+    </thead>
+    <tbody>
+      <% if @customers.empty? %>
+        <tr><td colspan="6" class="empty">No customers found.</td></tr>
+      <% end %>
+      <% @customers.each do |customer| %>
+        <tr>
+          <td><%= link_to customer.full_name, customer_path(customer) %></td>
+          <td><%= customer.email %></td>
+          <td><%= customer.city %></td>
+          <td><%= customer.state %></td>
+          <td><%= customer.branch %></td>
+          <td class="num"><%= customer.projects.size %></td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+</div>
+
+<div class="pager">
+  <% if @page > 1 %><%= link_to "‹ Previous", customers_path(page: @page - 1, state: params[:state]), class: "btn ghost" %><% end %>
+  <% if @page * @per_page < @total %><%= link_to "Next ›", customers_path(page: @page + 1, state: params[:state]), class: "btn ghost" %><% end %>
+  <span>showing <%= @customers.size %> of <%= number_with_delimiter @total %></span>
+</div>

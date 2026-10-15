@@ -1,0 +1,611 @@
+==============================================================================
+OPENTELEMETRY INSTRUMENTATION - POWER HOME REMODELING POC SANDBOX
+Steps only. No application code has been changed.
+==============================================================================
+
+Source documentation:
+
+  Dynatrace, OpenTelemetry Ruby walkthrough
+    https://docs.dynatrace.com/docs/shortlink/otel-wt-ruby
+  OpenTelemetry, Ruby instrumentation libraries
+    https://opentelemetry.io/docs/languages/ruby/libraries/
+  OpenTelemetry, OTLP exporter environment variables
+    https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/
+  Dynatrace, OTLP API endpoints and token scopes
+    https://docs.dynatrace.com/docs/ingest-from/opentelemetry/otlp-api
+
+Everything below is a proposed change for you to apply. Nothing in apps/ has
+been modified. Files you will edit when you decide to proceed:
+
+  apps/phr-api/Gemfile                             (add 3 gems)
+  apps/phr-api/config/initializers/opentelemetry.rb  (new file)
+  apps/phr-web/Gemfile                             (add 3 gems)
+  apps/phr-web/config/initializers/opentelemetry.rb  (new file)
+  k8s/30-app-config.yaml                           (add OTEL_* vars)
+  k8s/40-phr-api.yaml                              (add OTEL_SERVICE_NAME)
+  k8s/50-phr-web.yaml                              (add OTEL_SERVICE_NAME)
+  k8s/52-phr-worker.yaml                           (add OTEL_SERVICE_NAME)
+
+
+------------------------------------------------------------------------------
+CONTENTS
+------------------------------------------------------------------------------
+
+  0.  What gets instrumented, and what you should see
+  1.  Choose an export path
+  2.  Add the gems
+  3.  Add the initializer to phr-api
+  4.  Add the initializer to phr-web (also used by phr-worker)
+  5.  Set the environment variables
+  6.  Rebuild the images
+  7.  Redeploy
+  8.  Restart pods for metadata enrichment
+  9.  Verify
+  10. Gotchas specific to this sandbox
+  APPENDIX A. Export directly to the tenant instead of the collector
+  APPENDIX B. Instrumentation gem reference
+
+
+------------------------------------------------------------------------------
+0. WHAT GETS INSTRUMENTED, AND WHAT YOU SHOULD SEE
+------------------------------------------------------------------------------
+
+One gem, opentelemetry-instrumentation-all, covers every library this sandbox
+uses. These are the ones that will actually light up:
+
+  rack / action_pack   inbound HTTP spans, both apps
+  active_record        ORM-level spans
+  mysql2               SQL spans, with statement text
+  net_http             outbound spans: phr-web -> phr-api, worker -> phr-api
+  sidekiq              enqueue span in phr-web, execute span in phr-worker
+  redis                Sidekiq's queue operations
+  active_job           the ActiveJob layer above Sidekiq
+  action_view          template rendering in phr-web
+
+The single best end-to-end test once this is live, because it crosses every
+one of the above in one logical operation:
+
+  curl -sS -X POST "http://<LB_IP>/internal/leads"
+
+Expected trace shape:
+
+  phr-web   POST /internal/leads                      (rack)
+    +-- phr-web   HTTP POST /api/v1/leads              (net_http)
+    |     +-- phr-api   POST /api/v1/leads             (rack)
+    |           +-- phr-api   INSERT INTO leads        (mysql2)
+    +-- phr-web   LeadScoringJob enqueue               (sidekiq client)
+          ...async boundary, context carried in the job payload...
+          +-- phr-worker  LeadScoringJob execute       (sidekiq server)
+                +-- phr-worker  HTTP GET /api/v1/leads/:id   (net_http)
+                +-- phr-worker  HTTP PATCH /api/v1/leads/:id (net_http)
+                +-- phr-worker  SELECT ... FROM customers    (mysql2)
+
+The deliberate-misbehaviour endpoints already in the app become useful here.
+/debug/downstream?mode=error produces a trace where the failing span is in
+phr-api while the 502 surfaces in phr-web, and
+/api/v1/simulate/slow_query?seconds=2 produces a trace whose time is spent
+entirely in a mysql2 span.
+
+
+------------------------------------------------------------------------------
+1. CHOOSE AN EXPORT PATH
+------------------------------------------------------------------------------
+
+OPTION A -- send to the in-cluster OTel collector.   RECOMMENDED.
+
+Your DynaKube already runs one, and it is already doing the hard parts. The
+telemetryIngest block created a Service named telemetry-ingest in the
+dynatrace namespace, and the collector behind it:
+
+  - accepts OTLP with NO authentication. Its otlp receiver has no
+    authenticator configured, so the apps need no Dynatrace token at all.
+  - holds the Dynatrace token itself, exporting with
+    "Authorization: Api-Token ${DT_DATA_INGEST_TOKEN}".
+  - enriches every span with Kubernetes topology through its k8sattributes
+    processor: k8s.cluster.uid, k8s.node.name, k8s.namespace.name,
+    k8s.pod.name, k8s.pod.uid, k8s.deployment.name, k8s.statefulset.name,
+    k8s.daemonset.name, k8s.job.name and more.
+  - associates telemetry to the sending pod even if the app sets no
+    Kubernetes resource attributes, because its pod_association list ends
+    with "from: connection" and falls back to the sender's IP.
+  - stamps dt.entity.kubernetes_cluster and k8s.cluster.name = power-poc, so
+    spans bind to the Kubernetes cluster entity that already exists in your
+    tenant.
+
+Verified working from inside your cluster on 2026-09-11:
+
+  POST http://telemetry-ingest.dynatrace:4318/v1/traces   -> HTTP 200 in 6ms
+  POST https://telemetry-ingest.dynatrace:4318/v1/traces  -> TLS error
+
+So the scheme is http, not https. The receiver is plaintext inside the
+cluster. Use:
+
+  OTEL_EXPORTER_OTLP_ENDPOINT = http://telemetry-ingest.dynatrace:4318
+  OTEL_EXPORTER_OTLP_PROTOCOL = http/protobuf
+
+Ports on that Service, if you want a different transport:
+
+  otlp-http   4318/TCP     <- use this
+  otlp-grpc   4317/TCP
+  zipkin      9411/TCP
+  jaeger-grpc 14250/TCP
+  statsd      8125/UDP
+
+OPTION B -- send straight to the tenant OTLP API, as the Dynatrace Ruby
+walkthrough shows. No collector, but you put a token in every app and lose
+the Kubernetes enrichment. See Appendix A. Use this only if you
+specifically want to demonstrate the direct-ingest path.
+
+
+------------------------------------------------------------------------------
+2. ADD THE GEMS
+------------------------------------------------------------------------------
+
+CURRENT STATE, checked 2026-09-11:
+
+  apps/phr-api/Gemfile   already has opentelemetry-sdk and
+                         opentelemetry-exporter-otlp.
+                         MISSING opentelemetry-instrumentation-all.
+  apps/phr-web/Gemfile   has none of the three.
+
+That missing gem is not optional. The sdk and exporter alone give you a
+working pipeline that emits nothing: no Rails spans, no SQL spans, no
+outbound HTTP spans. opentelemetry-instrumentation-all is what supplies the
+library patches. Symptom is a clean startup, a reachable collector, and zero
+spans in Dynatrace.
+
+So: add all three to apps/phr-web/Gemfile, and add the third one to
+apps/phr-api/Gemfile.
+
+  gem "opentelemetry-sdk"
+  gem "opentelemetry-exporter-otlp"
+  gem "opentelemetry-instrumentation-all"
+
+Deliberately unpinned, to match how the rest of this repo works: there is no
+committed Gemfile.lock, and gems resolve at image build time. Once you have a
+build you like, capture the versions and pin them:
+
+  kubectl -n power-poc exec deploy/phr-api -- \
+    cat /app/Gemfile.lock > apps/phr-api/Gemfile.lock
+  kubectl -n power-poc exec deploy/phr-web -- \
+    cat /app/Gemfile.lock > apps/phr-web/Gemfile.lock
+
+Note the Dynatrace walkthrough lists opentelemetry-sdk and
+opentelemetry-exporter-otlp as required, and adds
+opentelemetry-instrumentation-all for automatic instrumentation. All three
+are wanted here.
+
+No new OS packages are needed. These are pure Ruby gems, and the build stage
+of both Dockerfiles already has build-essential and pkg-config for native
+extensions.
+
+
+------------------------------------------------------------------------------
+3. ADD THE INITIALIZER TO phr-api
+------------------------------------------------------------------------------
+
+Create apps/phr-api/config/initializers/opentelemetry.rb
+
+The OpenTelemetry Ruby docs are explicit that Rails apps put this in
+config/initializers/. That location matters: initializers run after
+Bundler.require and after the framework has loaded, which is what lets the
+instrumentation patch libraries that are already in memory. Putting it in
+config/application.rb or boot.rb would run too early and silently
+instrument nothing.
+
+  require "opentelemetry/sdk"
+  require "opentelemetry/exporter/otlp"
+  require "opentelemetry/instrumentation/all"
+
+  OpenTelemetry::SDK.configure do |c|
+    # service.name, the endpoint, and the protocol come from OTEL_* in the
+    # environment, so the same image can run as more than one service.
+    c.use_all(
+      # Kubelet probes /health and /ready every 10-20s on two replicas, and
+      # the load generator adds more. Left traced, they would dominate.
+      "OpenTelemetry::Instrumentation::Rack" => {
+        untraced_endpoints: ["/health", "/ready"]
+      }
+    )
+  end
+
+Verify the untraced_endpoints option name against the version of
+opentelemetry-instrumentation-rack that Bundler resolves. Check with:
+
+  kubectl -n power-poc exec deploy/phr-api -- \
+    sh -c 'gem contents opentelemetry-instrumentation-rack | grep -i readme'
+
+phr-api is ActionController::API rather than ActionController::Base. Rack and
+action_pack instrumentation both still apply; there is nothing extra to do
+for an API-only app.
+
+
+------------------------------------------------------------------------------
+4. ADD THE INITIALIZER TO phr-web (ALSO USED BY phr-worker)
+------------------------------------------------------------------------------
+
+Create apps/phr-web/config/initializers/opentelemetry.rb with the same
+content as step 3.
+
+One file covers both workloads. phr-web and phr-worker run the same image and
+differ only in their args, so Sidekiq boots the full Rails app and runs the
+same initializers. That is also exactly why the service name must come from
+the environment and not from this file. See step 5.
+
+
+------------------------------------------------------------------------------
+5. SET THE ENVIRONMENT VARIABLES
+------------------------------------------------------------------------------
+
+5a. Shared values, in k8s/30-app-config.yaml under "data:"
+
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://telemetry-ingest.dynatrace:4318"
+  OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
+  OTEL_TRACES_EXPORTER: "otlp"
+
+  # Metrics and logs: the Dynatrace walkthrough notes that the Ruby SDK does
+  # not yet have stable metrics or logs support. Leave them off, and keep
+  # getting container logs from the logMonitoring DaemonSet you already run.
+  OTEL_METRICS_EXPORTER: "none"
+  OTEL_LOGS_EXPORTER: "none"
+
+  # Applies to every workload. Per-workload service.name is set in 5b.
+  OTEL_RESOURCE_ATTRIBUTES: "service.namespace=power-poc,deployment.environment=poc"
+
+With OTEL_EXPORTER_OTLP_ENDPOINT and protocol http/protobuf, the SDK appends
+the signal path itself, giving .../v1/traces. Do not include /v1/traces in
+the variable. For grpc it would not be appended, which is one reason to
+prefer http/protobuf here.
+
+5b. Per-workload service names.
+
+This is the step people skip, and it matters more here than usual, because
+phr-web and phr-worker are the same image. If you set service_name in the
+initializer instead, the worker reports as phr-web and the async half of
+every trace lands on the wrong service.
+
+Add to the "env:" list of each Deployment:
+
+  k8s/40-phr-api.yaml
+    - name: OTEL_SERVICE_NAME
+      value: "phr-api"
+
+  k8s/50-phr-web.yaml
+    - name: OTEL_SERVICE_NAME
+      value: "phr-web"
+
+  k8s/52-phr-worker.yaml
+    - name: OTEL_SERVICE_NAME
+      value: "phr-worker"
+
+The two migration Jobs, k8s/41 and k8s/51, do not need any of this. They run
+rails db:migrate and exit. If you want them excluded explicitly rather than
+by omission, set OTEL_SDK_DISABLED: "true" on them.
+
+
+------------------------------------------------------------------------------
+6. REBUILD THE IMAGES
+------------------------------------------------------------------------------
+
+The Gemfiles changed, so both images must be rebuilt. A config-only rollout
+will not pick up new gems.
+
+  export ACR_NAME="ryanbalcerzakpoweracr"
+  ACR_NAME="$ACR_NAME" TAG=otel-v1 ./scripts/build-and-push.sh
+
+Use a fresh tag rather than reusing v1. With imagePullPolicy: IfNotPresent,
+reusing a tag can leave a node serving the old cached layer.
+
+Confirm the gems actually resolved into the image:
+
+  az acr repository show-tags --name "$ACR_NAME" --repository phr-web
+
+
+------------------------------------------------------------------------------
+7. REDEPLOY
+------------------------------------------------------------------------------
+
+  ACR_NAME="$ACR_NAME" TAG=otel-v1 ./scripts/deploy.sh
+
+The script renders k8s/ against your registry and the new tag, clears and
+re-runs the migration Jobs, and waits for every rollout. Migrations are
+already applied and the seeds are idempotent, so the Jobs are a no-op
+re-run.
+
+Prefer to do it by hand:
+
+  kubectl apply -k k8s/     # after setting the tag in kustomization.yaml
+  kubectl -n power-poc rollout status deploy/phr-api    --timeout=300s
+  kubectl -n power-poc rollout status deploy/phr-web    --timeout=300s
+  kubectl -n power-poc rollout status deploy/phr-worker --timeout=300s
+
+Check what is admissible before you commit to it:
+
+  kubectl apply -k k8s/ --dry-run=server
+
+
+------------------------------------------------------------------------------
+8. RESTART PODS FOR METADATA ENRICHMENT
+------------------------------------------------------------------------------
+
+Step 7 replaces every app pod, so this happens on its own. It is called out
+because it is a real trap if you ever apply an env-only change later.
+
+Your DynaKube has metadataEnrichment enabled and its status confirms
+power-poc is one of three matched namespaces. Enrichment works through a
+mutating webhook, which only acts at pod admission. The pods that were
+running before you installed the operator were created at
+2026-09-10T20:36 and carry no dynatrace annotations at all.
+
+After any change that does NOT recreate pods, force it:
+
+  kubectl -n power-poc rollout restart \
+    deploy/phr-web deploy/phr-api deploy/phr-worker
+
+The enrichment annotation is metadata.dynatrace.com, which the collector's
+k8sattributes processor is already configured to read and merge onto your
+resource attributes.
+
+
+------------------------------------------------------------------------------
+9. VERIFY
+------------------------------------------------------------------------------
+
+9a. Did the SDK start? Look for instrumentation being enabled at boot.
+
+  kubectl -n power-poc logs deploy/phr-api --tail=60 \
+    | grep -i -E 'otel|opentelemetry'
+
+A common failure is silence here plus no spans, which means the initializer
+never ran or the gems are missing. Confirm they are present in the image:
+
+  kubectl -n power-poc exec deploy/phr-api -- \
+    sh -c 'bundle list | grep -i opentelemetry'
+
+9b. Is the collector receiving anything? Before instrumentation this log is
+quiet, so any change is signal.
+
+  kubectl -n dynatrace logs power-poc-otel-collector-0 --since=10m \
+    | grep -viE 'deprecated|parser_collection|one or more paths'
+
+Export failures toward Dynatrace show up here, not in your app.
+
+9c. Generate a known trace.
+
+  IP=$(kubectl -n power-poc get svc phr-web \
+    -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+  curl -sS -X POST "http://${IP}/internal/leads" | python3 -m json.tool
+
+9d. Query Dynatrace. Spans only exist from the moment you rolled out, so set
+the timeframe accordingly rather than using a short relative window.
+
+  fetch spans, from: -30m
+  | filter k8s.namespace.name == "power-poc"
+  | fields timestamp, span.name, service.name, duration, span.status_code
+  | sort timestamp desc
+  | limit 50
+
+Confirm all three services are reporting:
+
+  fetch spans, from: -30m
+  | filter k8s.namespace.name == "power-poc"
+  | summarize count(), by: {service.name}
+
+Expected: phr-web, phr-api, phr-worker.
+
+Confirm traces actually span services rather than stopping at the boundary,
+which is the real question W3C trace context answers:
+
+  fetch spans, from: -30m
+  | filter k8s.namespace.name == "power-poc"
+  | summarize services = countDistinctExact(service.name), by: {trace.id}
+  | filter services > 1
+  | limit 20
+
+Any row means context propagated across a process boundary. Rows with 3
+services are ones that reached the Sidekiq worker.
+
+Confirm SQL spans:
+
+  fetch spans, from: -30m
+  | filter isNotNull(db.system)
+  | fields timestamp, service.name, db.system, db.namespace, db.statement
+  | limit 20
+
+
+------------------------------------------------------------------------------
+10. GOTCHAS SPECIFIC TO THIS SANDBOX
+------------------------------------------------------------------------------
+
+Puma runs clustered with preload_app!, so watch for spans going missing in
+forked workers.
+  config/puma.rb sets "workers ENV.fetch('WEB_CONCURRENCY', 2)" and
+  preload_app!. The SDK is therefore configured in the parent process, before
+  fork. BatchSpanProcessor exports from a background thread, and threads do
+  not survive fork. Recent versions detect the PID change and restart the
+  thread, so this may need nothing, but verify it rather than assume it:
+  compare span counts from a single-worker pod against the default.
+      kubectl -n power-poc set env deploy/phr-web WEB_CONCURRENCY=1
+  If that produces spans and 2 workers does not, move the SDK.configure call
+  into the existing on_worker_boot block in config/puma.rb.
+
+phr-web and phr-worker share one image.
+  Covered in step 5b. Service name must come from the environment.
+
+Do not set service_name in the initializer.
+  It would override OTEL_SERVICE_NAME and defeat step 5b. The Dynatrace
+  walkthrough sets c.service_name = 'ruby-quickstart' inline, which is right
+  for a single standalone script and wrong for three workloads sharing two
+  images.
+
+config/application.rb requires individual railties, not rails/all.
+  Both apps list active_model, active_job, active_record, action_controller
+  and action_view explicitly. This is fine. use_all enables only the
+  instrumentation whose target library is actually loaded. Nothing is needed
+  for the railties you do not load.
+
+ActiveJob and Sidekiq instrumentation can both fire for one job.
+  You may see a job represented twice, once at the ActiveJob layer and once
+  at the Sidekiq layer. If the traces look doubled, disable one:
+      c.use_all(
+        "OpenTelemetry::Instrumentation::ActiveJob" => { enabled: false }
+      )
+
+SQL statement text is controlled per-instrumentation.
+  The mysql2 and active_record instrumentation expose a db_statement option
+  with obfuscate / include / omit behaviour, and the default has changed
+  between versions. For a database-monitoring demo you probably want full
+  statements; check the resolved gem's README before assuming, and remember
+  that full statements can carry customer data in a real environment.
+
+The load generator is curl, so it starts no trace.
+  Every trace begins at phr-web or phr-api. That is correct and expected, and
+  means no inbound traceparent exists to continue. phr-loadgen needs no
+  instrumentation.
+
+Scale the load generator down while you are validating.
+  It runs a request every few seconds across a dozen endpoints, which makes a
+  single hand-made trace hard to find.
+      kubectl -n power-poc scale deploy/phr-loadgen --replicas=0
+  Turn it back on once you have confirmed the trace shape.
+
+You are on a sprint tenant.
+  apiUrl points at eia8244h.sprint.dynatracelabs.com. Feature flags there
+  differ from production, and the AG already reports
+  kubernetesSmartscapeEnabled=false and forward2ndGenMetricsToGrail=false.
+  If spans arrive but do not render as you expect, suspect the tenant before
+  the instrumentation.
+
+Two of four nodes have no Dynatrace node-level coverage.
+  Both agentpool nodes carry the CriticalAddonsOnly taint and the Dynatrace
+  DaemonSets have no matching toleration. This does not affect OTel spans,
+  which travel app -> collector, but it does mean those nodes contribute no
+  KSPM or log data.
+
+
+==============================================================================
+APPENDIX A. EXPORT DIRECTLY TO THE TENANT INSTEAD OF THE COLLECTOR
+==============================================================================
+
+This is the shape the Dynatrace Ruby walkthrough shows. It needs no
+collector, but it puts a token in every workload and you lose the Kubernetes
+enrichment the collector adds. Prefer Option A unless you are specifically
+demonstrating direct ingest.
+
+A1. Create an access token in Dynatrace with the scopes for the signals you
+send:
+
+  traces .... openTelemetryTrace.ingest
+  metrics ... metrics.ingest
+  logs ...... logs.ingest
+
+Scopes can be combined in one token, or added to an existing one.
+
+A2. Store it. Do not put it in the ConfigMap.
+
+  kubectl -n power-poc create secret generic phr-otel-token \
+    --from-literal=DT_API_TOKEN='dt0c01....'
+
+A3. Endpoint. The OTLP base path is /api/v2/otlp appended to your
+environment URL, and the walkthrough notes the base must end in
+/api/v2/otlp. For your tenant:
+
+  https://eia8244h.sprint.dynatracelabs.com/api/v2/otlp
+
+Per-signal paths are /v1/traces, /v1/metrics, /v1/logs.
+
+A4. Either configure the exporter in Ruby, as the walkthrough does:
+
+  require "opentelemetry/sdk"
+  require "opentelemetry/exporter/otlp"
+  require "opentelemetry/instrumentation/all"
+
+  DT_API_URL = ENV["DT_API_URL"]
+  DT_API_TOKEN = ENV["DT_API_TOKEN"]
+
+  OpenTelemetry::SDK.configure do |c|
+    c.use_all
+    c.add_span_processor(
+      OpenTelemetry::SDK::Trace::Export::BatchSpanProcessor.new(
+        OpenTelemetry::Exporter::OTLP::Exporter.new(
+          endpoint: DT_API_URL + "/v1/traces",
+          headers: { "Authorization": "Api-Token " + DT_API_TOKEN }
+        )
+      )
+    )
+  end
+
+... or do the same with environment variables only, keeping the initializer
+from step 3 unchanged:
+
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:
+    "https://eia8244h.sprint.dynatracelabs.com/api/v2/otlp/v1/traces"
+  OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
+  OTEL_EXPORTER_OTLP_HEADERS: "Authorization=Api-Token dt0c01...."
+
+The header variable takes key=value pairs separated by commas. Note that
+putting the token in OTEL_EXPORTER_OTLP_HEADERS means it appears in the pod
+spec and in "kubectl describe pod" output, which is a good reason to prefer
+the Ruby form with a secretKeyRef, or Option A with no token at all.
+
+A5. If you point at a local OneAgent endpoint rather than SaaS, the
+walkthrough says to add compression: "none" to the exporter to disable
+compression. Not needed for SaaS or for the collector path.
+
+
+==============================================================================
+APPENDIX B. INSTRUMENTATION GEM REFERENCE
+==============================================================================
+
+opentelemetry-instrumentation-all pulls in every gem below, which is why it
+is the only one you need. Listed for when you want to switch to explicit
+c.use calls, or to look up a gem's options.
+
+  Rails
+    opentelemetry-instrumentation-rails            ::Rails
+  Rack / Puma
+    opentelemetry-instrumentation-rack             ::Rack
+  Controllers
+    opentelemetry-instrumentation-action_pack      ::ActionPack
+  ERB views
+    opentelemetry-instrumentation-action_view      ::ActionView
+  ActiveRecord
+    opentelemetry-instrumentation-active_record    ::ActiveRecord
+  ActiveJob
+    opentelemetry-instrumentation-active_job       ::ActiveJob
+  ActiveSupport
+    opentelemetry-instrumentation-active_support   ::ActiveSupport
+  mysql2
+    opentelemetry-instrumentation-mysql2           ::Mysql2
+  Net::HTTP
+    opentelemetry-instrumentation-net_http         ::Net::HTTP
+  Sidekiq
+    opentelemetry-instrumentation-sidekiq          ::Sidekiq
+  Redis
+    opentelemetry-instrumentation-redis            ::Redis
+  concurrent-ruby
+    opentelemetry-instrumentation-concurrent_ruby  ::ConcurrentRuby
+
+  All names above are prefixed OpenTelemetry::Instrumentation for c.use.
+
+All twelve directories confirmed present in
+open-telemetry/opentelemetry-ruby-contrib on 2026-09-11.
+
+Selective form, if you ever want it:
+
+  OpenTelemetry::SDK.configure do |c|
+    c.use "OpenTelemetry::Instrumentation::Rails"
+    c.use "OpenTelemetry::Instrumentation::Mysql2"
+  end
+
+Disabling one while keeping use_all:
+
+  c.use_all("OpenTelemetry::Instrumentation::Redis" => { enabled: false })
+
+Or from the environment, without touching code:
+
+  OTEL_RUBY_INSTRUMENTATION_REDIS_ENABLED=false
+
+==============================================================================
+END
+==============================================================================

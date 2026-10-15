@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: power-poc
+  labels:
+    app.kubernetes.io/part-of: power-poc
+    # Dynatrace's operator uses namespace labels/selectors to decide where to
+    # inject. Keeping a stable label here makes that selector easy to write.
+    monitoring: dynatrace-poc

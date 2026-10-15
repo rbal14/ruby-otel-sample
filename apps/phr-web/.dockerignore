@@ -1,0 +1,12 @@
+.git
+.gitignore
+log/*
+tmp/*
+!tmp/pids
+!tmp/pids/.keep
+.env
+.env.*
+*.log
+node_modules
+.DS_Store
+storage/*

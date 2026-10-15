@@ -1,0 +1,19 @@
+<% content_for :title, @project.name %>
+<h1><%= @project.name %></h1>
+<p class="sub">Project #<%= @project.id %> &middot; <%= status_badge @project.status %></p>
+
+<div class="panel" style="padding:18px;">
+  <dl class="kv">
+    <dt>Customer</dt><dd><%= link_to @project.customer.full_name, customer_path(@project.customer) %></dd>
+    <dt>Product</dt><dd><%= @project.product.name %> (<%= @project.product.sku %>)</dd>
+    <dt>Category</dt><dd><%= humanize_key @project.product.category %></dd>
+    <dt>Quantity</dt><dd><%= @project.quantity %></dd>
+    <dt>Unit price</dt><dd><%= money @project.product.unit_price %></dd>
+    <dt>Contract amount</dt><dd><%= money @project.contract_amount %></dd>
+    <dt>Branch</dt><dd><%= @project.branch %></dd>
+    <dt>Crew</dt><dd><%= @project.crew_name.presence || "unassigned" %></dd>
+    <dt>Start date</dt><dd><%= @project.start_date&.to_s || "—" %></dd>
+    <dt>Completion date</dt><dd><%= @project.completion_date&.to_s || "—" %></dd>
+    <dt>Scope notes</dt><dd><%= @project.scope_notes.presence || "—" %></dd>
+  </dl>
+</div>

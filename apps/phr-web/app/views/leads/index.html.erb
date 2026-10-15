@@ -1,0 +1,44 @@
+<% content_for :title, "Leads" %>
+<h1>Leads</h1>
+<p class="sub">
+  Served by <code>phr-api</code> over HTTP &middot; <%= number_with_delimiter @total %> total &middot; page <%= @page %>
+</p>
+
+<div class="toolbar">
+  <%= form_with url: leads_path, method: :get, local: true do %>
+    <%= select_tag :status,
+          options_for_select([["All statuses", ""]] + %w[new contacted qualified appointment_set sold lost].map { |s| [s.tr("_", " "), s] }, params[:status]),
+          onchange: "this.form.requestSubmit()" %>
+  <% end %>
+</div>
+
+<div class="panel">
+  <table>
+    <thead>
+      <tr><th>Name</th><th>Zip</th><th>Source</th><th>Product</th><th>Status</th><th class="num">Score</th><th class="num">Est. value</th><th class="num">Appts</th></tr>
+    </thead>
+    <tbody>
+      <% if @leads.empty? %>
+        <tr><td colspan="8" class="empty">No leads returned.</td></tr>
+      <% end %>
+      <% @leads.each do |lead| %>
+        <tr>
+          <td><%= link_to lead["full_name"].presence || "#{lead['first_name']} #{lead['last_name']}", lead_path(lead["id"]) %></td>
+          <td><%= lead["zip_code"] %></td>
+          <td><%= humanize_key lead["source"] %></td>
+          <td><%= humanize_key lead["product_interest"] %></td>
+          <td><%= status_badge lead["status"] %></td>
+          <td class="num"><%= lead["score"] %></td>
+          <td class="num"><%= money lead["estimated_value"] %></td>
+          <td class="num"><%= Array(lead["appointments"]).size %></td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+</div>
+
+<div class="pager">
+  <% if @page > 1 %><%= link_to "‹ Previous", leads_path(page: @page - 1, status: params[:status]), class: "btn ghost" %><% end %>
+  <% if @page * @per_page < @total %><%= link_to "Next ›", leads_path(page: @page + 1, status: params[:status]), class: "btn ghost" %><% end %>
+  <span>showing <%= @leads.size %> of <%= number_with_delimiter @total %></span>
+</div>

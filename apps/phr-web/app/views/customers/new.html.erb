@@ -1,0 +1,28 @@
+<% content_for :title, "New customer" %>
+<h1>New customer</h1>
+<p class="sub">Writes directly to the <code>customers</code> table in the phr_web schema.</p>
+
+<% if @customer.errors.any? %>
+  <div class="errors">
+    <strong><%= pluralize @customer.errors.count, "error" %> prevented this customer from being saved:</strong>
+    <ul style="margin:8px 0 0; padding-left:20px;">
+      <% @customer.errors.full_messages.each do |message| %><li><%= message %></li><% end %>
+    </ul>
+  </div>
+<% end %>
+
+<div class="panel" style="padding:18px;">
+  <%= form_with model: @customer, local: true do |form| %>
+    <div class="field"><%= form.label :first_name %><%= form.text_field :first_name %></div>
+    <div class="field"><%= form.label :last_name %><%= form.text_field :last_name %></div>
+    <div class="field"><%= form.label :email %><%= form.email_field :email %></div>
+    <div class="field"><%= form.label :phone %><%= form.text_field :phone %></div>
+    <div class="field"><%= form.label :street %><%= form.text_field :street %></div>
+    <div class="field"><%= form.label :city %><%= form.text_field :city %></div>
+    <div class="field"><%= form.label :state, "State (2 letters)" %><%= form.text_field :state, maxlength: 2 %></div>
+    <div class="field"><%= form.label :zip_code %><%= form.text_field :zip_code %></div>
+    <div class="field"><%= form.label :branch %><%= form.text_field :branch, value: @customer.branch.presence || "Philadelphia" %></div>
+    <%= form.submit "Create customer", class: "btn" %>
+    <%= link_to "Cancel", customers_path, class: "btn ghost" %>
+  <% end %>
+</div>

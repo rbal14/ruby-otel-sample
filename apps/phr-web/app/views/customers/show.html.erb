@@ -1,0 +1,42 @@
+<% content_for :title, @customer.full_name %>
+<h1><%= @customer.full_name %></h1>
+<p class="sub">Customer #<%= @customer.id %> &middot; lifetime value <%= money @customer.lifetime_value %></p>
+
+<div class="panel" style="padding:18px;">
+  <dl class="kv">
+    <dt>Email</dt><dd><%= @customer.email %></dd>
+    <dt>Phone</dt><dd><%= @customer.phone.presence || "—" %></dd>
+    <dt>Address</dt><dd><%= [@customer.street, @customer.city, @customer.state, @customer.zip_code].compact_blank.join(", ") %></dd>
+    <dt>Branch</dt><dd><%= @customer.branch %></dd>
+    <dt>Source lead</dt>
+    <dd>
+      <% if @customer.source_lead_id %>
+        <%= link_to "lead ##{@customer.source_lead_id}", lead_path(@customer.source_lead_id) %>
+      <% else %>
+        —
+      <% end %>
+    </dd>
+    <dt>Created</dt><dd><%= @customer.created_at.strftime("%Y-%m-%d %H:%M UTC") %></dd>
+  </dl>
+</div>
+
+<h2>Projects</h2>
+<div class="panel">
+  <table>
+    <thead><tr><th>Project</th><th>Product</th><th>Status</th><th>Start</th><th class="num">Amount</th></tr></thead>
+    <tbody>
+      <% if @customer.projects.empty? %>
+        <tr><td colspan="5" class="empty">No projects for this customer.</td></tr>
+      <% end %>
+      <% @customer.projects.each do |project| %>
+        <tr>
+          <td><%= link_to project.name, project_path(project) %></td>
+          <td><%= project.product.name %></td>
+          <td><%= status_badge project.status %></td>
+          <td><%= project.start_date&.to_s || "—" %></td>
+          <td class="num"><%= money project.contract_amount %></td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+</div>

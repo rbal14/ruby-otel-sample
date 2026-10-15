@@ -1,0 +1,5 @@
+# Concurrency is set from SIDEKIQ_CONCURRENCY in config/initializers/sidekiq.rb.
+queues:
+  - default
+  - lead_scoring
+  - provisioning

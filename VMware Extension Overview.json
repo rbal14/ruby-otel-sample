@@ -1,0 +1,1822 @@
+{
+  "version": 21,
+  "variables": [
+    {
+      "version": 2,
+      "key": "vCenter",
+      "type": "query",
+      "visible": true,
+      "editable": true,
+      "multiple": true,
+      "defaultValue": "3420b2ac-f1cf-4b24-b62d-61ba1ba8ed05*",
+      "input": "smartscapeNodes `VMWARE_VCENTER`\n| fields name\n| sort name asc"
+    },
+    {
+      "version": 2,
+      "key": "Datacenter",
+      "type": "query",
+      "visible": true,
+      "editable": true,
+      "multiple": true,
+      "defaultValue": "3420b2ac-f1cf-4b24-b62d-61ba1ba8ed05*",
+      "input": "smartscapeNodes `VMWARE_DATACENTER`\n| filter in(vcenter, array($vCenter))\n| fields datacenter_name\n| sort datacenter_name asc"
+    },
+    {
+      "version": 2,
+      "key": "Cluster",
+      "type": "query",
+      "visible": true,
+      "editable": true,
+      "multiple": true,
+      "defaultValue": "3420b2ac-f1cf-4b24-b62d-61ba1ba8ed05*",
+      "input": "smartscapeNodes `VMWARE_CLUSTER`\n    | fieldsAdd dcid = arrayFirst(references[belongs_to.vmware_datacenter])\n    | lookup [ smartscapeNodes `VMWARE_DATACENTER` | fields id, datacenter_name ], sourceField:dcid, lookupField:id, fields:{datacenter_name}\n    | fields id, cluster_id, cluster_name, datacenter_name, vcenter\n| filter in(vcenter, array($vCenter)) and in(datacenter_name, array($Datacenter))\n| fields cluster_name\n| append [ data record(cluster_name = \"No Cluster\") ]\n| dedup cluster_name\n| sort cluster_name asc"
+    }
+  ],
+  "tiles": {
+    "3": {
+      "type": "markdown",
+      "content": "### Currently Monitoring\n"
+    },
+    "4": {
+      "title": "vCenters",
+      "type": "data",
+      "query": "smartscapeNodes `VMWARE_VCENTER`\n| filter in(name, array($vCenter))\n| summarize count()",
+      "visualization": "singleValue",
+      "visualizationSettings": {
+        "singleValue": {
+          "labelMode": "none",
+          "label": "host_info",
+          "recordField": "count()",
+          "colorThresholdTarget": "background",
+          "sparklineSettings": {
+            "isVisible": false,
+            "variant": "area",
+            "record": "host_info",
+            "showTicks": true
+          },
+          "trend": {
+            "isVisible": false
+          }
+        },
+        "coloring": {
+          "colorRules": [
+            {
+              "value": 0,
+              "comparator": ">",
+              "field": "count()",
+              "colorMode": "custom-color",
+              "customColor": {
+                "Default": "var(--dt-colors-charts-categorical-color-01-default, #134fc9)"
+              }
+            }
+          ]
+        },
+        "unitsOverrides": [
+          {
+            "identifier": "host_info.single_value",
+            "unitCategory": "unspecified",
+            "baseUnit": "count",
+            "displayUnit": "",
+            "decimals": 0,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 0,
+            "id": "host_info.single_value"
+          }
+        ],
+        "autoSelectVisualization": false
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "5": {
+      "title": "Clusters",
+      "type": "data",
+      "query": "smartscapeNodes `VMWARE_CLUSTER`\n    | fieldsAdd dcid = arrayFirst(references[belongs_to.vmware_datacenter])\n    | lookup [ smartscapeNodes `VMWARE_DATACENTER` | fields id, datacenter_name ], sourceField:dcid, lookupField:id, fields:{datacenter_name}\n    | fields id, cluster_id, cluster_name, datacenter_name, vcenter\n| filterOut cluster_name == \"No Cluster\"\n| filter in(vcenter, array($vCenter)) and in(datacenter_name, array($Datacenter)) and in(cluster_name, array($Cluster))\n| summarize count()",
+      "visualization": "singleValue",
+      "visualizationSettings": {
+        "singleValue": {
+          "labelMode": "none",
+          "label": "countDistinct(`dt.entity.vmware:cluster`)",
+          "recordField": "count()",
+          "colorThresholdTarget": "background",
+          "sparklineSettings": {
+            "isVisible": false,
+            "variant": "area",
+            "record": "host_info",
+            "showTicks": true
+          },
+          "trend": {
+            "isVisible": false
+          }
+        },
+        "coloring": {
+          "colorRules": [
+            {
+              "value": 0,
+              "comparator": ">",
+              "field": "count()",
+              "colorMode": "custom-color",
+              "customColor": {
+                "Default": "var(--dt-colors-charts-categorical-color-01-default, #134fc9)"
+              }
+            }
+          ]
+        },
+        "unitsOverrides": [
+          {
+            "identifier": "host_info.single_value",
+            "unitCategory": "unspecified",
+            "baseUnit": "count",
+            "displayUnit": "",
+            "decimals": 0,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 0,
+            "id": "host_info.single_value"
+          }
+        ],
+        "autoSelectVisualization": false
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "6": {
+      "title": "Data Centers",
+      "type": "data",
+      "query": "smartscapeNodes `VMWARE_DATACENTER`\n| filter in(vcenter, array($vCenter)) and in(datacenter_name, array($Datacenter))\n| summarize count()",
+      "visualization": "singleValue",
+      "visualizationSettings": {
+        "singleValue": {
+          "labelMode": "none",
+          "label": "host_info",
+          "recordField": "count()",
+          "colorThresholdTarget": "background",
+          "sparklineSettings": {
+            "isVisible": false,
+            "variant": "area",
+            "record": "host_info",
+            "showTicks": true
+          },
+          "trend": {
+            "isVisible": false
+          }
+        },
+        "coloring": {
+          "colorRules": [
+            {
+              "value": 0,
+              "comparator": ">",
+              "field": "count()",
+              "colorMode": "custom-color",
+              "customColor": {
+                "Default": "var(--dt-colors-charts-categorical-color-01-default, #134fc9)"
+              }
+            }
+          ]
+        },
+        "unitsOverrides": [
+          {
+            "identifier": "host_info.single_value",
+            "unitCategory": "unspecified",
+            "baseUnit": "count",
+            "displayUnit": "",
+            "decimals": 0,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 0,
+            "id": "host_info.single_value"
+          }
+        ]
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "7": {
+      "title": "Active VMs",
+      "type": "data",
+      "query": "smartscapeNodes `VMWARE_VIRTUALMACHINE`\n| filter (vm_connection_state == \"connected\") AND (vm_power_state == \"poweredOn\")\n| filter in(vcenter, array($vCenter))\n| summarize count()",
+      "visualization": "singleValue",
+      "visualizationSettings": {
+        "singleValue": {
+          "labelMode": "none",
+          "label": "countDistinct(`dt.entity.vmware:virtualmachine`)",
+          "recordField": "count()",
+          "colorThresholdTarget": "background",
+          "sparklineSettings": {
+            "isVisible": false,
+            "variant": "area",
+            "record": "vm_info",
+            "showTicks": true
+          },
+          "trend": {
+            "isVisible": false
+          }
+        },
+        "coloring": {
+          "colorRules": [
+            {
+              "value": 0,
+              "comparator": ">",
+              "field": "count()",
+              "colorMode": "custom-color",
+              "customColor": {
+                "Default": "var(--dt-colors-charts-categorical-color-01-default, #134fc9)"
+              }
+            }
+          ]
+        },
+        "unitsOverrides": [
+          {
+            "identifier": "countDistinct(`dt.entity.vmware:virtualmachine`)",
+            "unitCategory": "unspecified",
+            "baseUnit": "none",
+            "displayUnit": null,
+            "decimals": 0,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 0,
+            "id": "vm_info.single_value"
+          }
+        ]
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "8": {
+      "title": "Hosts in a Cluster",
+      "type": "data",
+      "query": "smartscapeNodes \"VMWARE_HOST\"\n| filter isNotNull(arrayFirst(references[runs_on.vmware_cluster]))\n| fieldsAdd cid = arrayFirst(references[runs_on.vmware_cluster])\n| lookup [ smartscapeNodes `VMWARE_CLUSTER`\n    | fieldsAdd dcid = arrayFirst(references[belongs_to.vmware_datacenter])\n    | lookup [ smartscapeNodes `VMWARE_DATACENTER` | fields id, datacenter_name ], sourceField:dcid, lookupField:id, fields:{datacenter_name}\n    | fields id, cluster_id, cluster_name, datacenter_name, vcenter ], sourceField:cid, lookupField:id, fields:{cluster_name, datacenter_name}\n| filter in(vcenter, array($vCenter)) and in(datacenter_name, array($Datacenter)) and in(cluster_name, array($Cluster))\n| summarize count()",
+      "visualization": "singleValue",
+      "visualizationSettings": {
+        "singleValue": {
+          "labelMode": "none",
+          "label": "countDistinct(`dt.entity.vmware:host`)",
+          "recordField": "count()",
+          "colorThresholdTarget": "background",
+          "sparklineSettings": {
+            "isVisible": false,
+            "variant": "area",
+            "record": "host_info",
+            "showTicks": true
+          },
+          "trend": {
+            "isVisible": false
+          }
+        },
+        "coloring": {
+          "colorRules": [
+            {
+              "value": 0,
+              "comparator": ">",
+              "field": "count()",
+              "colorMode": "custom-color",
+              "customColor": {
+                "Default": "var(--dt-colors-charts-categorical-color-01-default, #134fc9)"
+              }
+            }
+          ]
+        },
+        "unitsOverrides": [
+          {
+            "identifier": "host_info.single_value",
+            "unitCategory": "unspecified",
+            "baseUnit": "count",
+            "displayUnit": "",
+            "decimals": 0,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 0,
+            "id": "host_info.single_value"
+          }
+        ]
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "9": {
+      "title": "Standalone Hosts",
+      "type": "data",
+      "query": "smartscapeNodes VMWARE_HOST\n| filter isNull(arrayFirst(references[runs_on.vmware_cluster]))\n| filter in(vcenter, array($vCenter))\n| summarize count()",
+      "visualization": "singleValue",
+      "visualizationSettings": {
+        "singleValue": {
+          "labelMode": "none",
+          "label": "countDistinct(`dt.entity.vmware:host`)",
+          "recordField": "count()",
+          "colorThresholdTarget": "background",
+          "sparklineSettings": {
+            "isVisible": false,
+            "variant": "area",
+            "record": "host_info",
+            "showTicks": true
+          },
+          "trend": {
+            "isVisible": false
+          }
+        },
+        "coloring": {
+          "colorRules": [
+            {
+              "value": 0,
+              "comparator": ">",
+              "field": "count()",
+              "colorMode": "custom-color",
+              "customColor": {
+                "Default": "var(--dt-colors-charts-categorical-color-01-default, #134fc9)"
+              }
+            }
+          ]
+        },
+        "unitsOverrides": [
+          {
+            "identifier": "host_info.single_value",
+            "unitCategory": "unspecified",
+            "baseUnit": "count",
+            "displayUnit": "",
+            "decimals": 0,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 0,
+            "id": "host_info.single_value"
+          }
+        ],
+        "autoSelectVisualization": false
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "10": {
+      "title": "Connected/Disconnected Hosts",
+      "type": "data",
+      "query": "smartscapeNodes `VMWARE_HOST`\n| fieldsAdd cid = arrayFirst(references[runs_on.vmware_cluster])\n| lookup [ smartscapeNodes `VMWARE_CLUSTER`\n    | fieldsAdd dcid = arrayFirst(references[belongs_to.vmware_datacenter])\n    | lookup [ smartscapeNodes `VMWARE_DATACENTER` | fields id, datacenter_name ], sourceField:dcid, lookupField:id, fields:{datacenter_name}\n    | fields id, cluster_id, cluster_name, datacenter_name, vcenter ], sourceField:cid, lookupField:id, fields:{cluster_name}\n| fieldsAdd cluster_name = coalesce(cluster_name, \"No Cluster\")\n| filter in(vcenter, array($vCenter)) and in(cluster_name, array($Cluster))\n| fields name, host_connected_state\n| sort host_connected_state desc\n| limit 20",
+      "visualization": "honeycomb",
+      "visualizationSettings": {
+        "honeycomb": {
+          "dataMappings": {
+            "value": "host_connected_state"
+          },
+          "displayedFields": [
+            "entity.name",
+            "host_connected_state"
+          ]
+        },
+        "coloring": {
+          "colorRules": [
+            {
+              "colorMode": "custom-color",
+              "customColor": "#2F6863",
+              "field": "host_connected_state",
+              "value": "connected",
+              "comparator": "="
+            },
+            {
+              "colorMode": "custom-color",
+              "customColor": "#C4233B",
+              "field": "host_connected_state",
+              "value": "disconnected",
+              "comparator": "="
+            }
+          ]
+        },
+        "autoSelectVisualization": false,
+        "unitsOverrides": [
+          {
+            "identifier": "host_info.single_value",
+            "unitCategory": "unspecified",
+            "baseUnit": "count",
+            "displayUnit": "",
+            "decimals": 0,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 0,
+            "id": "host_info.single_value"
+          }
+        ]
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "11": {
+      "title": "Datastores",
+      "type": "data",
+      "query": "smartscapeNodes `VMWARE_DATASTORE`\n| fieldsAdd dcid = arrayFirst(references[belongs_to.vmware_datacenter])\n| lookup [ smartscapeNodes `VMWARE_DATACENTER` | fields id, datacenter_name ], sourceField:dcid, lookupField:id, fields:{datacenter_name}\n| filter in(vcenter, array($vCenter)) and in(datacenter_name, array($Datacenter))\n| summarize count()",
+      "visualization": "singleValue",
+      "visualizationSettings": {
+        "singleValue": {
+          "labelMode": "none",
+          "label": "countDistinct(`dt.entity.vmware:datastore`)",
+          "recordField": "count()",
+          "colorThresholdTarget": "background",
+          "sparklineSettings": {
+            "isVisible": false,
+            "variant": "area",
+            "record": "datastore_info",
+            "showTicks": true
+          },
+          "trend": {
+            "isVisible": false
+          }
+        },
+        "coloring": {
+          "colorRules": [
+            {
+              "value": 0,
+              "comparator": ">",
+              "field": "count()",
+              "colorMode": "custom-color",
+              "customColor": {
+                "Default": "var(--dt-colors-charts-categorical-color-01-default, #134fc9)"
+              }
+            }
+          ]
+        },
+        "unitsOverrides": [
+          {
+            "identifier": "datastore_info.single_value",
+            "unitCategory": "unspecified",
+            "baseUnit": "count",
+            "displayUnit": "",
+            "decimals": 0,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 0,
+            "id": "datastore_info.single_value"
+          }
+        ]
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "13": {
+      "type": "markdown",
+      "content": "### vSphere Clusters"
+    },
+    "14": {
+      "title": "VMware Cluster Resource Details",
+      "type": "data",
+      "query": "timeseries by: {`dt.smartscape.vmware_cluster` }, filter: { cluster.name != \"No Cluster\" and in(device.address, array($vCenter)) and in(cluster.name, array($Cluster)) },  {\n  cpu_capacity = avg(vmware.cluster.cpu.capacity),\n  cpu_used= avg(vmware.cluster.cpu.used),\n  mem_capacity = avg(vmware.cluster.mem.capacity),\n  mem_used= avg(vmware.cluster.mem.used),\n  storage_capacity = avg(vmware.cluster.storage.capacity),\n  storage_used= avg(vmware.cluster.storage.used)\n}\n| lookup [\n    smartscapeNodes  `VMWARE_CLUSTER`\n    | fields id, entity.name, cluster = record(entityId=id, displayName=entity.name, dim=\"dt.smartscape.vmware_cluster\")\n],\n sourceField: `dt.smartscape.vmware_cluster`,\n lookupField: id,\n fields: cluster\n| lookup [ smartscapeNodes `VMWARE_CLUSTER`\n    | fieldsAdd dcid = arrayFirst(references[belongs_to.vmware_datacenter])\n    | lookup [ smartscapeNodes `VMWARE_DATACENTER` | fields id, datacenter_name ], sourceField:dcid, lookupField:id, fields:{datacenter_name}\n    | fields id, cluster_id, cluster_name, datacenter_name, vcenter ], sourceField: `dt.smartscape.vmware_cluster`, lookupField: id, fields: {datacenter_name}\n| filter in(datacenter_name, array($Datacenter))\n| fieldsAdd \n  name = getNodeName(`dt.smartscape.vmware_cluster`),\n  cpu_cap      = arrayLast(cpu_capacity),\n  cpu_used     = arrayLast(cpu_used),\n  mem_cap      = arrayLast(mem_capacity),\n  mem_used     = arrayLast(mem_used),\n  storage_cap  = arrayLast(storage_capacity),\n  storage_used = arrayLast(storage_used)\n\n| fieldsAdd entity_id = getNodeField(`dt.smartscape.vmware_cluster`, \"id\")\n| fieldsAdd entity_url = concat(\"/ui/intent/dynatrace.infraops/view_smartscape_technology_details#{\\\"extensionNodeId\\\":\\\"\", entity_id, \"\\\"}\")\n| fieldsAdd Entity = concat(\"[\", name, \"]\", \"(\", entity_url, \")\")\n\n| fields Entity, cpu_used, cpu_cap, mem_used, mem_cap, storage_used, storage_cap\n| fieldsRename `Cluster`=Entity, \n               `CPU Used`=cpu_used,\n               `CPU Capacity`=cpu_cap,\n               `Memory Used`=mem_used,\n               `Memory Capacity`=mem_cap,\n               `Storage Used`=storage_used,\n               `Storage Capacity`=storage_cap\n| sort `CPU Used` desc\n| limit 20",
+      "visualization": "table",
+      "visualizationSettings": {
+        "table": {
+          "hiddenColumns": [
+            [
+              "A:dt.entity.vmware:cluster.name"
+            ],
+            [
+              "B:dt.entity.vmware:cluster.name"
+            ],
+            [
+              "timeframe"
+            ],
+            [
+              "interval"
+            ]
+          ],
+          "columnTypeOverrides": [
+            {
+              "id": 1193694.200000003,
+              "fields": [
+                "Cluster"
+              ],
+              "value": "markdown",
+              "disableRemoval": false
+            }
+          ]
+        },
+        "unitsOverrides": [
+          {
+            "identifier": "CPU Used",
+            "unitCategory": "frequency",
+            "baseUnit": "megahertz",
+            "displayUnit": null,
+            "decimals": 2,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 0,
+            "id": "average"
+          },
+          {
+            "identifier": "CPU Capacity",
+            "unitCategory": "frequency",
+            "baseUnit": "megahertz",
+            "displayUnit": null,
+            "decimals": 2,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 1722542519264
+          },
+          {
+            "identifier": "Memory Used",
+            "unitCategory": "data",
+            "baseUnit": "mebibyte",
+            "displayUnit": null,
+            "decimals": 2,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 1722542599196
+          },
+          {
+            "identifier": "Memory Capacity",
+            "unitCategory": "data",
+            "baseUnit": "mebibyte",
+            "displayUnit": null,
+            "decimals": 2,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 1722542625895
+          },
+          {
+            "identifier": "Storage Capacity",
+            "unitCategory": "data",
+            "baseUnit": "mebibyte",
+            "displayUnit": null,
+            "decimals": 2,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 1722542641423
+          },
+          {
+            "identifier": "Storage Used",
+            "unitCategory": "data",
+            "baseUnit": "mebibyte",
+            "displayUnit": null,
+            "decimals": 2,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 1722542722559
+          }
+        ]
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "15": {
+      "type": "markdown",
+      "content": "### ESXi Hosts"
+    },
+    "16": {
+      "title": "VMware Host Avg CPU %",
+      "type": "data",
+      "query": "timeseries by: {`dt.smartscape.vmware_host`}, filter: { in(device.address, array($vCenter)) and in(datacenter.name, array($Datacenter)) and in(cluster.name, array($Cluster)) }, {\n  average_cpu = avg(vmware.host.cpu.usage.average)\n}\n| fieldsAdd average_cpu = arrayAvg(average_cpu), {getNodeName(`dt.smartscape.vmware_host`), alias: Name}\n| sort average_cpu desc\n| fields Name, average_cpu, `dt.smartscape.vmware_host`\n| fieldsRename `Host Name`=Name, `Average CPU %`=average_cpu\n| limit 20",
+      "visualization": "categoricalBarChart",
+      "visualizationSettings": {
+        "chartSettings": {
+          "truncationMode": "middle",
+          "categoricalBarChartSettings": {
+            "categoryAxisLabel": "Host Name",
+            "categoryAxis": [
+              "Host Name"
+            ],
+            "valueAxis": [
+              "Average CPU %"
+            ],
+            "valueAxisLabel": "Average CPU %"
+          }
+        },
+        "coloring": {
+          "thresholdRules": [
+            {
+              "color": "#2F6863",
+              "min": 0,
+              "max": 75,
+              "colorMode": "single-color",
+              "mode": "range",
+              "position": "left",
+              "strokeOnly": false
+            },
+            {
+              "color": "#f5d30f",
+              "min": 75,
+              "max": 90,
+              "colorMode": "single-color",
+              "mode": "range",
+              "position": "left",
+              "strokeOnly": false
+            },
+            {
+              "color": "#C4233B",
+              "min": 90,
+              "max": null,
+              "colorMode": "single-color",
+              "mode": "range",
+              "position": "left",
+              "strokeOnly": false
+            }
+          ]
+        },
+        "unitsOverrides": [
+          {
+            "identifier": "average",
+            "unitCategory": "percentage",
+            "baseUnit": "percent",
+            "displayUnit": null,
+            "decimals": 2,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 0,
+            "id": "average"
+          },
+          {
+            "identifier": "average",
+            "unitCategory": "percentage",
+            "baseUnit": "percent",
+            "displayUnit": null,
+            "decimals": 2,
+            "suffix": "%",
+            "delimiter": false,
+            "cascade": null,
+            "added": 1,
+            "id": "average"
+          }
+        ],
+        "autoSelectVisualization": false
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "17": {
+      "title": "CPU Usage",
+      "type": "data",
+      "query": "timeseries average = avg(vmware.host.cpu.usage.average), by: { `dt.smartscape.vmware_host` }, filter: { in(device.address, array($vCenter)) and in(datacenter.name, array($Datacenter)) and in(cluster.name, array($Cluster)) }\n| sort arrayAvg(average) desc\n| fieldsAdd getNodeName(`dt.smartscape.vmware_host`), `dt.smartscape.vmware_host`\n| limit 20",
+      "visualization": "lineChart",
+      "visualizationSettings": {
+        "chartSettings": {
+          "truncationMode": "middle",
+          "legend": {
+            "hidden": true
+          },
+          "xAxisLabel": "timeframe",
+          "xAxisScaling": "analyzedTimeframe",
+          "fieldMapping": {
+            "leftAxisValues": [
+              "average"
+            ],
+            "timestamp": "timeframe"
+          }
+        },
+        "dataMapping": {
+          "displayedFields": [
+            "dt.entity.vmware:host.name",
+            "node.name"
+          ]
+        },
+        "unitsOverrides": [
+          {
+            "identifier": "average",
+            "unitCategory": "percentage",
+            "baseUnit": "percent",
+            "displayUnit": "",
+            "decimals": 2,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 0,
+            "id": "average"
+          }
+        ]
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "18": {
+      "title": "Memory Usage",
+      "type": "data",
+      "query": "timeseries average = avg(vmware.host.mem.usage.average), by: { `dt.smartscape.vmware_host` }, filter: { in(device.address, array($vCenter)) and in(datacenter.name, array($Datacenter)) and in(cluster.name, array($Cluster)) }\n| sort arrayAvg(average) desc\n| fieldsAdd getNodeName(`dt.smartscape.vmware_host`), `dt.smartscape.vmware_host`\n| limit 20",
+      "visualization": "lineChart",
+      "visualizationSettings": {
+        "chartSettings": {
+          "truncationMode": "middle",
+          "legend": {
+            "hidden": true
+          },
+          "xAxisLabel": "timeframe",
+          "xAxisScaling": "analyzedTimeframe",
+          "fieldMapping": {
+            "leftAxisValues": [
+              "average"
+            ],
+            "timestamp": "timeframe"
+          }
+        },
+        "dataMapping": {
+          "displayedFields": [
+            "dt.entity.vmware:host.name",
+            "node.name"
+          ]
+        },
+        "unitsOverrides": [
+          {
+            "identifier": "average",
+            "unitCategory": "percentage",
+            "baseUnit": "percent",
+            "displayUnit": "",
+            "decimals": 2,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 0,
+            "id": "average"
+          }
+        ]
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "19": {
+      "type": "markdown",
+      "content": "### vSphere VMs"
+    },
+    "20": {
+      "title": "VMware VM Avg CPU %",
+      "type": "data",
+      "query": "timeseries by: {`dt.smartscape.vmware_virtualmachine`, cluster.id}, filter: { in(device.address, array($vCenter)) }, {\n  average_cpu = avg(vmware.vm.cpu.usage.average)\n}\n| lookup [ smartscapeNodes `VMWARE_CLUSTER`\n    | fieldsAdd dcid = arrayFirst(references[belongs_to.vmware_datacenter])\n    | lookup [ smartscapeNodes `VMWARE_DATACENTER` | fields id, datacenter_name ], sourceField:dcid, lookupField:id, fields:{datacenter_name}\n    | fields id, cluster_id, cluster_name, datacenter_name, vcenter ], sourceField: cluster.id, lookupField: cluster_id, fields: {cluster_name, datacenter_name}\n| fieldsAdd cluster_name = coalesce(cluster_name, \"No Cluster\")\n| filter in(cluster_name, array($Cluster)) and (in(datacenter_name, array($Datacenter)) or cluster_name == \"No Cluster\")\n| fieldsAdd average_cpu = arrayAvg(average_cpu), {getNodeName(`dt.smartscape.vmware_virtualmachine`), alias: Name}\n| sort average_cpu desc\n| fields Name, average_cpu, `dt.smartscape.vmware_virtualmachine`\n| fieldsRename `Host Name`=Name, `Average CPU %`=average_cpu\n| limit 20",
+      "visualization": "categoricalBarChart",
+      "visualizationSettings": {
+        "chartSettings": {
+          "truncationMode": "middle",
+          "categoricalBarChartSettings": {
+            "categoryAxisLabel": "Host Name",
+            "categoryAxis": [
+              "Host Name"
+            ],
+            "valueAxis": [
+              "Average CPU %"
+            ],
+            "valueAxisLabel": "Average CPU %"
+          }
+        },
+        "coloring": {
+          "thresholdRules": [
+            {
+              "color": "#2F6863",
+              "min": 0,
+              "max": 75,
+              "colorMode": "single-color",
+              "mode": "range",
+              "position": "left",
+              "strokeOnly": false
+            },
+            {
+              "color": "#f5d30f",
+              "min": 75,
+              "max": 90,
+              "colorMode": "single-color",
+              "mode": "range",
+              "position": "left",
+              "strokeOnly": false
+            },
+            {
+              "color": "#C4233B",
+              "min": 90,
+              "max": null,
+              "colorMode": "single-color",
+              "mode": "range",
+              "position": "left",
+              "strokeOnly": false
+            }
+          ]
+        },
+        "unitsOverrides": [
+          {
+            "identifier": "average",
+            "unitCategory": "percentage",
+            "baseUnit": "percent",
+            "displayUnit": "",
+            "decimals": 2,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 0,
+            "id": "average"
+          },
+          {
+            "identifier": "average",
+            "unitCategory": "percentage",
+            "baseUnit": "percent",
+            "displayUnit": "",
+            "decimals": 2,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 1,
+            "id": "average"
+          }
+        ],
+        "autoSelectVisualization": false
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "21": {
+      "title": "CPU Usage",
+      "type": "data",
+      "query": "timeseries average = avg(vmware.vm.cpu.usage.average), by: { `dt.smartscape.vmware_virtualmachine`, cluster.id }, filter: { in(device.address, array($vCenter)) }\n| lookup [ smartscapeNodes `VMWARE_CLUSTER`\n    | fieldsAdd dcid = arrayFirst(references[belongs_to.vmware_datacenter])\n    | lookup [ smartscapeNodes `VMWARE_DATACENTER` | fields id, datacenter_name ], sourceField:dcid, lookupField:id, fields:{datacenter_name}\n    | fields id, cluster_id, cluster_name, datacenter_name, vcenter ], sourceField: cluster.id, lookupField: cluster_id, fields: {cluster_name, datacenter_name}\n| fieldsAdd cluster_name = coalesce(cluster_name, \"No Cluster\")\n| filter in(cluster_name, array($Cluster)) and (in(datacenter_name, array($Datacenter)) or cluster_name == \"No Cluster\")\n| sort arrayAvg(average) desc\n| fieldsAdd getNodeName(`dt.smartscape.vmware_virtualmachine`), `dt.smartscape.vmware_virtualmachine`\n| limit 20",
+      "visualization": "lineChart",
+      "visualizationSettings": {
+        "chartSettings": {
+          "truncationMode": "middle",
+          "legend": {
+            "hidden": true
+          },
+          "xAxisLabel": "timeframe",
+          "xAxisScaling": "analyzedTimeframe",
+          "fieldMapping": {
+            "leftAxisValues": [
+              "average"
+            ],
+            "timestamp": "timeframe"
+          }
+        },
+        "dataMapping": {
+          "displayedFields": [
+            "dt.entity.vmware:virtualmachine.name",
+            "node.name"
+          ]
+        },
+        "unitsOverrides": [
+          {
+            "identifier": "average",
+            "unitCategory": "percentage",
+            "baseUnit": "percent",
+            "displayUnit": "",
+            "decimals": 2,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 0,
+            "id": "average"
+          }
+        ]
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "22": {
+      "title": "Memory Usage",
+      "type": "data",
+      "query": "timeseries average = avg(vmware.vm.mem.usage.average), by: { `dt.smartscape.vmware_virtualmachine`, cluster.id }, filter: { in(device.address, array($vCenter)) }\n| lookup [ smartscapeNodes `VMWARE_CLUSTER`\n    | fieldsAdd dcid = arrayFirst(references[belongs_to.vmware_datacenter])\n    | lookup [ smartscapeNodes `VMWARE_DATACENTER` | fields id, datacenter_name ], sourceField:dcid, lookupField:id, fields:{datacenter_name}\n    | fields id, cluster_id, cluster_name, datacenter_name, vcenter ], sourceField: cluster.id, lookupField: cluster_id, fields: {cluster_name, datacenter_name}\n| fieldsAdd cluster_name = coalesce(cluster_name, \"No Cluster\")\n| filter in(cluster_name, array($Cluster)) and (in(datacenter_name, array($Datacenter)) or cluster_name == \"No Cluster\")\n| sort arrayAvg(average) desc\n| fieldsAdd getNodeName(`dt.smartscape.vmware_virtualmachine`), `dt.smartscape.vmware_virtualmachine`\n| limit 20",
+      "visualization": "lineChart",
+      "visualizationSettings": {
+        "chartSettings": {
+          "truncationMode": "middle",
+          "legend": {
+            "hidden": true
+          },
+          "xAxisLabel": "timeframe",
+          "xAxisScaling": "analyzedTimeframe",
+          "fieldMapping": {
+            "leftAxisValues": [
+              "average"
+            ],
+            "timestamp": "timeframe"
+          }
+        },
+        "dataMapping": {
+          "displayedFields": [
+            "dt.entity.vmware:virtualmachine.name",
+            "node.name"
+          ]
+        },
+        "unitsOverrides": [
+          {
+            "identifier": "average",
+            "unitCategory": "percentage",
+            "baseUnit": "percent",
+            "displayUnit": "",
+            "decimals": 2,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 0,
+            "id": "average"
+          }
+        ]
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "23": {
+      "type": "markdown",
+      "content": "### vSphere Datastores"
+    },
+    "24": {
+      "title": "VMware Datastores",
+      "type": "data",
+      "query": "timeseries { freeSpace = avg(vmware.datastore.freeSpace), capacity = avg(vmware.datastore.capacity) }, by: { `dt.smartscape.vmware_datastore`}, filter: { in(device.address, array($vCenter)) }\n| fieldsAdd used = 100 - (100 * (freeSpace[] / capacity[] ))\n| fieldsAdd used = arrayLast(used)\n| sort used desc\n| join [ timeseries freeSpace = avg(vmware.datastore.freeSpace), by: { `dt.smartscape.vmware_datastore` }, filter: { in(device.address, array($vCenter)) }\n       | fieldsAdd freeSpace = arrayLast(freeSpace) ], on: { `dt.smartscape.vmware_datastore` }, fields: {freeSpace, `dt.smartscape.vmware_datastore`, interval, timeframe}, kind: outer\n| join [ timeseries capacity = avg(vmware.datastore.capacity), by: { `dt.smartscape.vmware_datastore` }, filter: { in(device.address, array($vCenter)) }\n       | fieldsAdd capacity = arrayLast(capacity) ], on: { `dt.smartscape.vmware_datastore` }, fields: {capacity, `dt.smartscape.vmware_datastore`, interval, timeframe}, kind: outer\n| lookup [ smartscapeNodes `VMWARE_DATASTORE`\n    | fieldsAdd dcid = arrayFirst(references[belongs_to.vmware_datacenter])\n    | lookup [ smartscapeNodes `VMWARE_DATACENTER` | fields id, datacenter_name ], sourceField:dcid, lookupField:id, fields:{datacenter_name}\n    | fields id, datacenter_name ], sourceField: `dt.smartscape.vmware_datastore`, lookupField: id, fields: {datacenter_name}\n| filter in(datacenter_name, array($Datacenter))\n| fieldsAdd getNodeName(`dt.smartscape.vmware_datastore`), alias: Name\n\n| fieldsAdd entity_id = getNodeField(`dt.smartscape.vmware_datastore`, \"id\")\n| fieldsAdd entity_url = concat(\"/ui/intent/dynatrace.infraops/view_smartscape_technology_details#{\\\"extensionNodeId\\\":\\\"\", entity_id, \"\\\"}\")\n| fieldsAdd Entity = concat(\"[\", Name, \"]\", \"(\", entity_url, \")\")\n\n| fields Entity, freeSpace, capacity, used\n| fieldsRename `Datastore Name`=Entity, `Free Space`=freeSpace, `Capacity`=capacity, `Used %`=used\n| sort `Used %` desc\n| limit 20",
+      "visualization": "table",
+      "visualizationSettings": {
+        "table": {
+          "hiddenColumns": [
+            [
+              "A:dt.entity.vmware:datastore.name"
+            ],
+            [
+              "B:dt.entity.vmware:datastore.name"
+            ],
+            [
+              "C:dt.entity.vmware:datastore.name"
+            ],
+            [
+              "timeframe"
+            ],
+            [
+              "interval"
+            ]
+          ],
+          "columnTypeOverrides": [
+            {
+              "id": 10508644.100000009,
+              "fields": [
+                "Datastore Name"
+              ],
+              "value": "markdown",
+              "disableRemoval": false
+            }
+          ]
+        },
+        "coloring": {
+          "colorRules": [
+            {
+              "value": 0,
+              "comparator": "\u2265",
+              "field": "Used %",
+              "colorMode": "custom-color",
+              "customColor": "#2F6863",
+              "metadata": {
+                "applyTo": "cell",
+                "fields": [
+                  "Used %"
+                ]
+              },
+              "type": "double"
+            },
+            {
+              "value": 70,
+              "comparator": "\u2265",
+              "field": "Used %",
+              "colorMode": "custom-color",
+              "customColor": "#f5d30f",
+              "metadata": {
+                "applyTo": "cell",
+                "fields": [
+                  "Used %"
+                ]
+              },
+              "type": "double"
+            },
+            {
+              "value": 90,
+              "comparator": "\u2265",
+              "field": "Used %",
+              "colorMode": "custom-color",
+              "customColor": "#C4233B",
+              "metadata": {
+                "applyTo": "cell",
+                "fields": [
+                  "Used %"
+                ]
+              },
+              "type": "double"
+            }
+          ]
+        },
+        "unitsOverrides": [
+          {
+            "identifier": "Free Space",
+            "unitCategory": "data",
+            "baseUnit": "byte",
+            "displayUnit": null,
+            "decimals": 2,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 0,
+            "id": "used"
+          },
+          {
+            "identifier": "Capacity",
+            "unitCategory": "data",
+            "baseUnit": "byte",
+            "displayUnit": null,
+            "decimals": 2,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 1722541161317
+          },
+          {
+            "identifier": "Used %",
+            "unitCategory": "percentage",
+            "baseUnit": "percent",
+            "displayUnit": null,
+            "decimals": 2,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 1722541171408
+          }
+        ]
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "25": {
+      "title": "Top Datastore Usage",
+      "type": "data",
+      "query": "timeseries { freeSpace = avg(vmware.datastore.freeSpace), capacity = avg(vmware.datastore.capacity) }, by: { device.address, dt.metrics.source, datastore.id, `dt.smartscape.vmware_datastore`, `dt.smartscape.vmware_vcenter`, datastore.name }, filter: { in(device.address, array($vCenter)) }\n| lookup [ smartscapeNodes `VMWARE_DATASTORE`\n    | fieldsAdd dcid = arrayFirst(references[belongs_to.vmware_datacenter])\n    | lookup [ smartscapeNodes `VMWARE_DATACENTER` | fields id, datacenter_name ], sourceField:dcid, lookupField:id, fields:{datacenter_name}\n    | fields id, datacenter_name ], sourceField: `dt.smartscape.vmware_datastore`, lookupField: id, fields: {datacenter_name}\n| filter in(datacenter_name, array($Datacenter))\n| fieldsAdd used = 100 - (100 * (freeSpace[] / capacity[] ))\n| summarize { used = avg(used[] ) }, by: { `dt.smartscape.vmware_datastore`, interval, timeframe }\n| sort arrayAvg(used) desc\n| fieldsAdd getNodeName(`dt.smartscape.vmware_datastore`), `dt.smartscape.vmware_datastore`\n| limit 20",
+      "visualization": "lineChart",
+      "visualizationSettings": {
+        "chartSettings": {
+          "truncationMode": "middle",
+          "legend": {
+            "hidden": true
+          },
+          "xAxisLabel": "timeframe",
+          "xAxisScaling": "analyzedTimeframe",
+          "fieldMapping": {
+            "leftAxisValues": [
+              "used"
+            ],
+            "timestamp": "timeframe"
+          },
+          "gapPolicy": "connect"
+        },
+        "dataMapping": {
+          "displayedFields": [
+            "node.name"
+          ]
+        },
+        "unitsOverrides": [
+          {
+            "identifier": "used",
+            "unitCategory": "percentage",
+            "baseUnit": "percent",
+            "displayUnit": "",
+            "decimals": 2,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 0,
+            "id": "used"
+          }
+        ]
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "27": {
+      "title": "vCenter Triggered Alarms & Events",
+      "type": "data",
+      "query": "fetch logs\n| filter(isNotNUll(vcenter.address))\n| filter in(vcenter.address, array($vCenter))\n| fields timestamp, `vcenter.address`, `host.name`, content \n| fieldsRename Time=timestamp, vCenter=vcenter.address, Host=host.name, Message=content \n| sort Time desc\n| limit 20",
+      "visualization": "table",
+      "visualizationSettings": {},
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "28": {
+      "type": "markdown",
+      "content": "### Overview of VMware extension data\n\nStart here to navigate to the extension configuration and/or entity pages to view charts displaying data collected for vSphere Clusters, ESXi Hosts, VMs, and more. \n\nIf you don't see data: \u2699\ufe0f [Configure extension](/ui/apps/dynatrace.extensions.manager/configurations/com.dynatrace.vmware-integration/configs)\n"
+    },
+    "31": {
+      "type": "markdown",
+      "content": "### vCenter Alarms & Events"
+    },
+    "38": {
+      "type": "markdown",
+      "content": "### Additional Resources:\n#### [VMware Extension Documentation](/ui/apps/dynatrace.extensions.manager/configurations/com.dynatrace.vmware-integration/details)"
+    },
+    "39": {
+      "title": "VMware Host Avg Memory %",
+      "type": "data",
+      "query": "timeseries by: {`dt.smartscape.vmware_host`}, filter: { in(device.address, array($vCenter)) and in(datacenter.name, array($Datacenter)) and in(cluster.name, array($Cluster)) }, {\n  average_mem = avg(vmware.host.mem.usage.average)\n}\n| fieldsAdd  average_mem = arrayAvg(average_mem), {getNodeName(`dt.smartscape.vmware_host`), alias: Name}\n| sort average_mem desc\n| fields Name, average_mem, `dt.smartscape.vmware_host`\n| fieldsRename `Host Name`=Name,`Average Memory %`=average_mem\n| limit 20",
+      "visualization": "categoricalBarChart",
+      "visualizationSettings": {
+        "chartSettings": {
+          "truncationMode": "middle",
+          "categoricalBarChartSettings": {
+            "categoryAxisLabel": "Host Name",
+            "categoryAxis": [
+              "Host Name"
+            ],
+            "valueAxis": [
+              "Average Memory %"
+            ],
+            "valueAxisLabel": "Average Memory %"
+          }
+        },
+        "coloring": {
+          "thresholdRules": [
+            {
+              "color": "#2F6863",
+              "min": 0,
+              "max": 75,
+              "colorMode": "single-color",
+              "mode": "range",
+              "position": "left",
+              "strokeOnly": false
+            },
+            {
+              "color": "#f5d30f",
+              "min": 75,
+              "max": 90,
+              "colorMode": "single-color",
+              "mode": "range",
+              "position": "left",
+              "strokeOnly": false
+            },
+            {
+              "color": "#C4233B",
+              "min": 90,
+              "max": null,
+              "colorMode": "single-color",
+              "mode": "range",
+              "position": "left",
+              "strokeOnly": false
+            }
+          ]
+        },
+        "unitsOverrides": [
+          {
+            "identifier": "average",
+            "unitCategory": "percentage",
+            "baseUnit": "percent",
+            "displayUnit": null,
+            "decimals": 2,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 0,
+            "id": "average"
+          },
+          {
+            "identifier": "average",
+            "unitCategory": "percentage",
+            "baseUnit": "percent",
+            "displayUnit": null,
+            "decimals": 2,
+            "suffix": "%",
+            "delimiter": false,
+            "cascade": null,
+            "added": 1,
+            "id": "average"
+          }
+        ],
+        "autoSelectVisualization": false
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "40": {
+      "title": "VMware VM Avg Memory %",
+      "type": "data",
+      "query": "timeseries by: {`dt.smartscape.vmware_virtualmachine`, cluster.id}, filter: { in(device.address, array($vCenter)) }, {\n  average_mem = avg(vmware.vm.mem.usage.average)\n}\n| lookup [ smartscapeNodes `VMWARE_CLUSTER`\n    | fieldsAdd dcid = arrayFirst(references[belongs_to.vmware_datacenter])\n    | lookup [ smartscapeNodes `VMWARE_DATACENTER` | fields id, datacenter_name ], sourceField:dcid, lookupField:id, fields:{datacenter_name}\n    | fields id, cluster_id, cluster_name, datacenter_name, vcenter ], sourceField: cluster.id, lookupField: cluster_id, fields: {cluster_name, datacenter_name}\n| fieldsAdd cluster_name = coalesce(cluster_name, \"No Cluster\")\n| filter in(cluster_name, array($Cluster)) and (in(datacenter_name, array($Datacenter)) or cluster_name == \"No Cluster\")\n| fieldsAdd average_mem = arrayAvg(average_mem), {getNodeName(`dt.smartscape.vmware_virtualmachine`), alias: Name}\n| sort average_mem desc\n| fields Name, average_mem, `dt.smartscape.vmware_virtualmachine`\n| fieldsRename `Host Name`=Name, `Average Memory %`=average_mem\n| limit 20",
+      "visualization": "categoricalBarChart",
+      "visualizationSettings": {
+        "chartSettings": {
+          "truncationMode": "middle",
+          "categoricalBarChartSettings": {
+            "categoryAxisLabel": "Host Name",
+            "categoryAxis": [
+              "Host Name"
+            ],
+            "valueAxis": [
+              "Average Memory %"
+            ],
+            "valueAxisLabel": "Average Memory %"
+          }
+        },
+        "coloring": {
+          "thresholdRules": [
+            {
+              "color": "#2F6863",
+              "min": 0,
+              "max": 75,
+              "colorMode": "single-color",
+              "mode": "range",
+              "position": "left",
+              "strokeOnly": false
+            },
+            {
+              "color": "#f5d30f",
+              "min": 75,
+              "max": 90,
+              "colorMode": "single-color",
+              "mode": "range",
+              "position": "left",
+              "strokeOnly": false
+            },
+            {
+              "color": "#C4233B",
+              "min": 90,
+              "max": null,
+              "colorMode": "single-color",
+              "mode": "range",
+              "position": "left",
+              "strokeOnly": false
+            }
+          ]
+        },
+        "unitsOverrides": [
+          {
+            "identifier": "average",
+            "unitCategory": "percentage",
+            "baseUnit": "percent",
+            "displayUnit": "",
+            "decimals": 2,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 0,
+            "id": "average"
+          },
+          {
+            "identifier": "average",
+            "unitCategory": "percentage",
+            "baseUnit": "percent",
+            "displayUnit": "",
+            "decimals": 2,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 1,
+            "id": "average"
+          }
+        ],
+        "autoSelectVisualization": false
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "41": {
+      "type": "markdown",
+      "content": "**\ud83d\udd17 Navigate to the Infrastructure & Operations App to view the entities:**\n\n* [vCenters](/ui/intent/dynatrace.infraops/view_smartscape_technology_inventory#{\\\"extensionNodeType\\\":\\\"VMWARE_VCENTER\\\"})\n\n* [Datacenters](/ui/intent/dynatrace.infraops/view_smartscape_technology_inventory#{\\\"extensionNodeType\\\":\\\"VMWARE_DATACENTER\\\"})\n\n* [Clusters](/ui/intent/dynatrace.infraops/view_smartscape_technology_inventory#{\\\"extensionNodeType\\\":\\\"VMWARE_CLUSTER\\\"})\n\n* [ESXi Hosts](/ui/intent/dynatrace.infraops/view_smartscape_technology_inventory#{\\\"extensionNodeType\\\":\\\"VMWARE_HOST\\\"})\n\n* [Virtual Machines](/ui/intent/dynatrace.infraops/view_smartscape_technology_inventory#{\\\"extensionNodeType\\\":\\\"VMWARE_VIRTUALMACHINE\\\"})\n\n* [Datastores](/ui/intent/dynatrace.infraops/view_smartscape_technology_inventory#{\\\"extensionNodeType\\\":\\\"VMWARE_DATASTORE\\\"})"
+    },
+    "42": {
+      "title": "Disks",
+      "type": "data",
+      "query": "smartscapeNodes `VMWARE_DISK`\n| lookup [ smartscapeNodes `VMWARE_CLUSTER`\n    | fieldsAdd dcid = arrayFirst(references[belongs_to.vmware_datacenter])\n    | lookup [ smartscapeNodes `VMWARE_DATACENTER` | fields id, datacenter_name ], sourceField:dcid, lookupField:id, fields:{datacenter_name}\n    | fields id, cluster_id, cluster_name, datacenter_name, vcenter ], sourceField:cluster_id, lookupField:cluster_id, fields:{cluster_name, datacenter_name}\n| fieldsAdd cluster_name = coalesce(cluster_name, \"No Cluster\")\n| filter in(device_address, array($vCenter)) and in(cluster_name, array($Cluster))\n| summarize count()",
+      "visualization": "singleValue",
+      "visualizationSettings": {
+        "singleValue": {
+          "labelMode": "none",
+          "label": "countDistinct(`dt.entity.vmware:virtualmachine`)",
+          "recordField": "count()",
+          "colorThresholdTarget": "background",
+          "sparklineSettings": {
+            "isVisible": false,
+            "variant": "area",
+            "record": "vm_info",
+            "showTicks": true
+          },
+          "trend": {
+            "isVisible": false
+          }
+        },
+        "coloring": {
+          "colorRules": [
+            {
+              "value": 0,
+              "comparator": ">",
+              "field": "count()",
+              "colorMode": "custom-color",
+              "customColor": {
+                "Default": "var(--dt-colors-charts-categorical-color-01-default, #134fc9)"
+              }
+            }
+          ]
+        },
+        "unitsOverrides": [
+          {
+            "identifier": "countDistinct(`dt.entity.vmware:virtualmachine`)",
+            "unitCategory": "unspecified",
+            "baseUnit": "none",
+            "displayUnit": null,
+            "decimals": 0,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 0,
+            "id": "vm_info.single_value"
+          }
+        ]
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "43": {
+      "title": "Total ESXi Hosts",
+      "type": "data",
+      "query": "smartscapeNodes `VMWARE_HOST`\n| fieldsAdd cid = arrayFirst(references[runs_on.vmware_cluster])\n| lookup [ smartscapeNodes `VMWARE_CLUSTER`\n    | fieldsAdd dcid = arrayFirst(references[belongs_to.vmware_datacenter])\n    | lookup [ smartscapeNodes `VMWARE_DATACENTER` | fields id, datacenter_name ], sourceField:dcid, lookupField:id, fields:{datacenter_name}\n    | fields id, cluster_id, cluster_name, datacenter_name, vcenter ], sourceField:cid, lookupField:id, fields:{cluster_name}\n| fieldsAdd cluster_name = coalesce(cluster_name, \"No Cluster\")\n| filter in(vcenter, array($vCenter)) and in(cluster_name, array($Cluster))\n| summarize count()",
+      "visualization": "singleValue",
+      "visualizationSettings": {
+        "singleValue": {
+          "labelMode": "none",
+          "label": "countDistinct(`dt.entity.vmware:virtualmachine`)",
+          "recordField": "count()",
+          "colorThresholdTarget": "background",
+          "sparklineSettings": {
+            "isVisible": false,
+            "variant": "area",
+            "record": "vm_info",
+            "showTicks": true
+          },
+          "trend": {
+            "isVisible": false
+          }
+        },
+        "coloring": {
+          "colorRules": [
+            {
+              "value": 0,
+              "comparator": ">",
+              "field": "count()",
+              "colorMode": "custom-color",
+              "customColor": {
+                "Default": "var(--dt-colors-charts-categorical-color-01-default, #134fc9)"
+              }
+            }
+          ]
+        },
+        "unitsOverrides": [
+          {
+            "identifier": "countDistinct(`dt.entity.vmware:virtualmachine`)",
+            "unitCategory": "unspecified",
+            "baseUnit": "none",
+            "displayUnit": null,
+            "decimals": 0,
+            "suffix": "",
+            "delimiter": false,
+            "cascade": null,
+            "added": 0,
+            "id": "vm_info.single_value"
+          }
+        ]
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "44": {
+      "type": "markdown",
+      "content": "### ESXi Host Overview"
+    }
+  },
+  "layouts": {
+    "3": {
+      "x": 0,
+      "y": 3,
+      "w": 40,
+      "h": 1
+    },
+    "4": {
+      "x": 0,
+      "y": 4,
+      "w": 5,
+      "h": 3
+    },
+    "5": {
+      "x": 10,
+      "y": 4,
+      "w": 5,
+      "h": 3
+    },
+    "6": {
+      "x": 5,
+      "y": 4,
+      "w": 5,
+      "h": 3
+    },
+    "7": {
+      "x": 15,
+      "y": 4,
+      "w": 5,
+      "h": 3
+    },
+    "8": {
+      "x": 5,
+      "y": 11,
+      "w": 5,
+      "h": 3
+    },
+    "9": {
+      "x": 0,
+      "y": 11,
+      "w": 5,
+      "h": 3
+    },
+    "10": {
+      "x": 10,
+      "y": 11,
+      "w": 16,
+      "h": 3
+    },
+    "11": {
+      "x": 5,
+      "y": 7,
+      "w": 5,
+      "h": 3
+    },
+    "13": {
+      "x": 0,
+      "y": 14,
+      "w": 40,
+      "h": 1
+    },
+    "14": {
+      "x": 0,
+      "y": 15,
+      "w": 40,
+      "h": 5
+    },
+    "15": {
+      "x": 0,
+      "y": 20,
+      "w": 40,
+      "h": 1
+    },
+    "16": {
+      "x": 0,
+      "y": 21,
+      "w": 20,
+      "h": 6
+    },
+    "17": {
+      "x": 20,
+      "y": 21,
+      "w": 20,
+      "h": 6
+    },
+    "18": {
+      "x": 20,
+      "y": 27,
+      "w": 20,
+      "h": 6
+    },
+    "19": {
+      "x": 0,
+      "y": 33,
+      "w": 40,
+      "h": 1
+    },
+    "20": {
+      "x": 0,
+      "y": 34,
+      "w": 20,
+      "h": 6
+    },
+    "21": {
+      "x": 20,
+      "y": 34,
+      "w": 20,
+      "h": 6
+    },
+    "22": {
+      "x": 20,
+      "y": 40,
+      "w": 20,
+      "h": 6
+    },
+    "23": {
+      "x": 0,
+      "y": 46,
+      "w": 40,
+      "h": 1
+    },
+    "24": {
+      "x": 0,
+      "y": 47,
+      "w": 20,
+      "h": 7
+    },
+    "25": {
+      "x": 20,
+      "y": 47,
+      "w": 20,
+      "h": 7
+    },
+    "27": {
+      "x": 0,
+      "y": 55,
+      "w": 40,
+      "h": 6
+    },
+    "28": {
+      "x": 0,
+      "y": 0,
+      "w": 35,
+      "h": 3
+    },
+    "31": {
+      "x": 0,
+      "y": 54,
+      "w": 40,
+      "h": 1
+    },
+    "38": {
+      "x": 0,
+      "y": 61,
+      "w": 40,
+      "h": 3
+    },
+    "39": {
+      "x": 0,
+      "y": 27,
+      "w": 20,
+      "h": 6
+    },
+    "40": {
+      "x": 0,
+      "y": 40,
+      "w": 20,
+      "h": 6
+    },
+    "41": {
+      "x": 20,
+      "y": 4,
+      "w": 6,
+      "h": 5
+    },
+    "42": {
+      "x": 10,
+      "y": 7,
+      "w": 5,
+      "h": 3
+    },
+    "43": {
+      "x": 0,
+      "y": 7,
+      "w": 5,
+      "h": 3
+    },
+    "44": {
+      "x": 0,
+      "y": 10,
+      "w": 15,
+      "h": 1
+    }
+  },
+  "importedWithCode": false,
+  "settings": {
+    "gridLayout": {
+      "mode": "responsive",
+      "columnsCount": 40
+    }
+  },
+  "annotations": []
+}

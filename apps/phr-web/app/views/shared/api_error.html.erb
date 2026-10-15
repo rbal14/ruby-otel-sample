@@ -1,0 +1,21 @@
+<% content_for :title, "Leads service unavailable" %>
+<h1>Leads service unavailable</h1>
+<p class="sub">phr-web is up, but the call to phr-api did not succeed.</p>
+
+<div class="panel" style="padding: 18px;">
+  <dl class="kv">
+    <dt>Error class</dt><dd><code><%= @error.class.name %></code></dd>
+    <dt>Message</dt><dd><code><%= @error.message %></code></dd>
+    <dt>Upstream status</dt><dd><code><%= @error.status || "n/a" %></code></dd>
+    <dt>API base URL</dt><dd><code><%= Rails.configuration.x.api_base_url %></code></dd>
+  </dl>
+</div>
+
+<h2>Things to check</h2>
+<div class="panel" style="padding: 18px;">
+  <ul style="margin:0; padding-left: 20px; color: #6b7280;">
+    <li><code>kubectl -n power-poc get pods -l app=phr-api</code></li>
+    <li><code>kubectl -n power-poc logs -l app=phr-api --tail=50</code></li>
+    <li>Confirm <code>PHR_API_URL</code> on phr-web matches the phr-api Service name.</li>
+  </ul>
+</div>

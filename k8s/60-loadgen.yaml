@@ -1,0 +1,61 @@
+# Traffic generator. Scale to 0 replicas when you want a quiet baseline:
+#   kubectl -n power-poc scale deploy/phr-loadgen --replicas=0
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: phr-loadgen
+  namespace: power-poc
+  labels:
+    app: phr-loadgen
+    app.kubernetes.io/name: phr-loadgen
+    app.kubernetes.io/component: loadgen
+    app.kubernetes.io/part-of: power-poc
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: phr-loadgen
+  template:
+    metadata:
+      labels:
+        app: phr-loadgen
+        app.kubernetes.io/name: phr-loadgen
+        app.kubernetes.io/component: loadgen
+        app.kubernetes.io/part-of: power-poc
+    spec:
+      containers:
+        - name: loadgen
+          image: curlimages/curl:8.11.1
+          imagePullPolicy: IfNotPresent
+          # This image's ENTRYPOINT is ["curl"], so it has to be replaced.
+          command: ["sh"]
+          args: ["/scripts/traffic.sh"]
+          env:
+            - name: WEB_URL
+              value: "http://phr-web"
+            - name: API_URL
+              value: "http://phr-api:3000"
+            - name: INTERVAL_SECONDS
+              value: "3"
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 96Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 100
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: scripts
+          configMap:
+            name: phr-loadgen-script
+            defaultMode: 0755

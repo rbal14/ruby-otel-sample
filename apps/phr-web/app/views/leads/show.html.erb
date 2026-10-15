@@ -1,0 +1,39 @@
+<% content_for :title, "Lead ##{@lead['id']}" %>
+<h1><%= @lead["full_name"].presence || "#{@lead['first_name']} #{@lead['last_name']}" %></h1>
+<p class="sub">Lead #<%= @lead["id"] %> &middot; <%= status_badge @lead["status"] %> &middot; fetched from phr-api</p>
+
+<div class="panel" style="padding:18px;">
+  <dl class="kv">
+    <dt>Email</dt><dd><%= @lead["email"] %></dd>
+    <dt>Phone</dt><dd><%= @lead["phone"].presence || "—" %></dd>
+    <dt>Zip code</dt><dd><%= @lead["zip_code"] %></dd>
+    <dt>Source</dt><dd><%= humanize_key @lead["source"] %></dd>
+    <dt>Product interest</dt><dd><%= humanize_key @lead["product_interest"] %></dd>
+    <dt>Score</dt><dd><%= @lead["score"] %></dd>
+    <dt>Estimated value</dt><dd><%= money @lead["estimated_value"] %></dd>
+    <dt>Notes</dt><dd><%= @lead["notes"].presence || "—" %></dd>
+  </dl>
+</div>
+
+<h2>Appointments</h2>
+<div class="panel">
+  <table>
+    <thead><tr><th>Scheduled</th><th>Rep</th><th>Branch</th><th>Status</th><th>Outcome</th><th class="num">Quoted</th></tr></thead>
+    <tbody>
+      <% appointments = Array(@lead["appointments"]) %>
+      <% if appointments.empty? %>
+        <tr><td colspan="6" class="empty">No appointments for this lead.</td></tr>
+      <% end %>
+      <% appointments.each do |appointment| %>
+        <tr>
+          <td><%= appointment["scheduled_at"] %></td>
+          <td><%= appointment["rep_name"] %></td>
+          <td><%= appointment["branch"] %></td>
+          <td><%= status_badge appointment["status"] %></td>
+          <td><%= humanize_key appointment["outcome"] %></td>
+          <td class="num"><%= money appointment["quoted_amount"] %></td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+</div>
